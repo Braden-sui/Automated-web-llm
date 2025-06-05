@@ -25,7 +25,7 @@ from web_automation.utils.url_helpers import is_similar_url, get_domain
 from web_automation.captcha.captcha_handler import CaptchaIntegration
 from web_automation.captcha.captcha_handler import SimpleCaptchaHandler
 from pydantic import ValidationError
-# from ..memory.memory_enhanced_agent import MemoryEnhancedWebBrowserAgent # Old, to be removed
+from ..memory.memory_enhanced_agent import MemoryEnhancedWebBrowserAgent
 from ..memory.memory_manager import BrowserMemoryManager
 
 from ..config import settings
@@ -333,18 +333,14 @@ class WebBrowserAgent:
     async def _enable_stealth(self):
         if not self._context or not self._page:
             logger.warning("STEALTH: Context or Page not available, skipping playwright-stealth application.")
-            print("STEALTH: Context or Page not available, skipping playwright-stealth application.")
             return
 
         try:
             logger.info("STEALTH: Attempting to apply playwright-stealth protection...")
-            print("STEALTH: Attempting to apply playwright-stealth protection...")
             await stealth_async(self._page)
             logger.info("STEALTH: Successfully applied playwright-stealth protection.")
-            print("STEALTH: Successfully applied playwright-stealth protection.")
         except Exception as e:
             logger.error(f"STEALTH: Error applying playwright-stealth: {e}", exc_info=True)
-            print(f"STEALTH: Error applying playwright-stealth: {e}")
             # Decide if this should re-raise or if the agent can continue without stealth
             # For now, logging the error and continuing.
 
@@ -353,7 +349,6 @@ class WebBrowserAgent:
         # For now, assuming playwright-stealth covers the necessary basics.
 
         logger.info("STEALTH: _enable_stealth completed using playwright-stealth.")
-        print("STEALTH: _enable_stealth completed using playwright-stealth.")
 
     async def _apply_memory_context(self, instruction_data, memories: List[Dict]) -> any:
         """
@@ -998,12 +993,12 @@ async def main():
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     
-    print("Initializing WebBrowserAgent for CAPTCHA test...")
+    logger.info("Initializing WebBrowserAgent for CAPTCHA test...")
     agent = WebBrowserAgent(headless=False, stealth=True) # Ensure headless is False for visibility
     captcha_handler = SimpleCaptchaHandler() # Initialize the CAPTCHA handler
 
     async with agent:
-        print("WebBrowserAgent entered context. Navigating to reCAPTCHA test page...")
+        logger.info("WebBrowserAgent entered context. Navigating to reCAPTCHA test page...")
         
         # Navigate to a reCAPTCHA v2 test page
         # You might need to find a reliable public test page, or set up your own.
@@ -1012,45 +1007,31 @@ async def main():
         await agent._page.goto(recaptcha_test_url, wait_until="domcontentloaded")
         logger.info(f"Navigated to: {recaptcha_test_url}")
 
-        print("Attempting to handle CAPTCHA...")
+        logger.info("Attempting to handle CAPTCHA...")
         # Use the captcha_handler to detect and solve CAPTCHAs on the current page
         captcha_solved = await captcha_handler.handle_page_captchas(agent._page)
         
         if captcha_solved:
             logger.info("CAPTCHA successfully handled!")
-            print("CAPTCHA successfully handled!")
         else:
             logger.warning("Failed to handle CAPTCHA.")
-            print("Failed to handle CAPTCHA.")
 
-        print("CAPTCHA handling complete. Pausing for human inspection (30 seconds)...")
-        print("You can inspect the browser window to see the result.")
+        logger.info("CAPTCHA handling complete. Pausing for human inspection (30 seconds)...")
+        logger.info("You can inspect the browser window to see the result.")
         await asyncio.sleep(30) # Pause for human inspection
 
-        print("WebBrowserAgent exited context. Test finished.")
-        print(f"CAPTCHA Handler Stats: {captcha_handler.get_stats()}")
+        logger.info("WebBrowserAgent exited context. Test finished.")
+        logger.info(f"CAPTCHA Handler Stats: {captcha_handler.get_stats()}")
 
-    print("WebBrowserAgent exited context. Test finished.")
+    logger.info("WebBrowserAgent exited context. Test finished.")
 
 
 def create_browser_agent(memory_enabled: bool = True, **kwargs) -> Union[WebBrowserAgent, MemoryEnhancedWebBrowserAgent]:
-    """Factory method to create appropriate browser agent"""
-    # Ensure settings is accessible, it should be imported at the top of the file
-    # from ..config import settings
-    if memory_enabled and settings.awm_config.ENABLED:
-        awm_config_dict = {
-            "backend": settings.awm_config.BACKEND,
-            "database_url": settings.awm_config.DATABASE_URL,
-            # The AWM class in awm_integration.py expects a generic awm_config dict.
-            # The MemoryEnhancedWebBrowserAgent then passes this to AWMBrowserMemory.
-            # The AWMBrowserMemory constructor uses AWM(**awm_config), so it needs keys like 'backend', 'database_url'.
-            # The 'retention_days' key was in the original plan but AWMBrowserMemory doesn't directly use it; AWM itself might.
-            # For now, sticking to what AWM constructor in the plan implies.
-            # If AWM class itself needs more specific keys from AWMConfig, this dict should be expanded.
-        }
-        return MemoryEnhancedWebBrowserAgent(awm_config=awm_config_dict, **kwargs)
-    else:
-        return WebBrowserAgent(**kwargs)
+    """Factory helper returning a standard or memory-enhanced agent."""
+
+    if memory_enabled:
+        return MemoryEnhancedWebBrowserAgent(mem0_config=mem0ai_config, **kwargs)
+    return WebBrowserAgent(memory_enabled=False, **kwargs)
 
 if __name__ == "__main__":
     # Setup logging

@@ -1,5 +1,6 @@
 from mem0 import Memory
 import logging
+import os
 from web_automation.config.config_models import Mem0AIConfig
 
 logger = logging.getLogger(__name__)
@@ -17,39 +18,16 @@ class BrowserMemoryManager:
 
         if mem0_config:
             if mem0_config.api_key:
-                # mem0.Memory can take a config dict. We can structure it like:
-                # mem0_initialization_config = {
-                #     "llm_config": {
-                #         "config": {
-                #             "api_key": mem0_config.api_key,
-                #             # Potentially other llm params like model name if added to Mem0AIConfig
-                #         }
-                #     }
-                # }
-                # For simplicity, if mem0 directly supports api_key at the top level of its config or via env var,
-                # we might not need to structure it deeply. Assuming direct or env var for now.
-                # If mem0 uses an environment variable like MEM0_API_KEY, setting it here or ensuring it's set
-                # before Memory() is called would be one way. Some libraries auto-pick env vars.
-                # Let's assume for now that if api_key is provided, we pass it in a way mem0 expects.
-                # The Mem0 library's documentation should clarify the exact structure for API key passing.
-                # A common pattern is passing it in a nested config or relying on env vars.
-                # For now, we'll prepare a simple config dict. If mem0_config.agent_id is also present, add it.
-                pass # API key handling will depend on mem0 library's specifics.
-                     # If it's via env var, it should be set before this. If via config dict, structure it here.
-                     # For now, we assume mem0() will pick up env vars or use a default if no config is passed.
-            
+                os.environ.setdefault("MEM0_API_KEY", mem0_config.api_key)
             if mem0_config.agent_id:
-                 # If agent_id is used by mem0.Memory constructor or its config:
-                 # mem0_initialization_config['agent_id'] = mem0_config.agent_id
-                 pass
+                mem0_initialization_config["agent_id"] = mem0_config.agent_id
 
         try:
-            # If mem0_initialization_config has been populated, pass it:
-            # self.memory = Memory(config=mem0_initialization_config) if mem0_initialization_config else Memory()
-            # For now, sticking to simpler initialization as the exact config structure for mem0 is not fully detailed here.
-            # The user can set MEM0_API_KEY environment variable for mem0 to pick up.
-            self.memory = Memory()
-            logger.info("Mem0 Memory initialized successfully. Ensure MEM0_API_KEY env var is set if required.")
+            if mem0_initialization_config:
+                self.memory = Memory(**mem0_initialization_config)
+            else:
+                self.memory = Memory()
+            logger.info("Mem0 Memory initialized successfully.")
         except Exception as e:
             logger.error(f"Failed to initialize Mem0 Memory: {e}")
             self.memory = None # Fallback or raise error
