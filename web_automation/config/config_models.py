@@ -34,10 +34,43 @@ class GeneralConfig(BaseModel):
     PROFILES_DIR: str = Field("web_automation/profiles", description="Directory to store user profiles")
 
 class Mem0AdapterConfig(BaseModel):
-    api_key: Optional[str] = Field(None, description="API key for Mem0 AI. If None, mem0ai might use environment variables.")
-    agent_id: Optional[str] = Field(None, description="Specific agent ID for Mem0 AI, if applicable.")
-    # Add other relevant Mem0 configuration parameters here
-    # e.g., model_name: Optional[str] = Field(None, description="Model to use for Mem0 AI.")
+    api_key: Optional[str] = Field(
+        None, 
+        description="API key for Mem0 AI. If None, mem0ai might use environment variables."
+    )
+    agent_id: Optional[str] = Field(
+        None, 
+        description="Specific agent ID for Mem0 AI, if applicable."
+    )
+    
+    # Qdrant specific configuration for Mem0's vector store
+    qdrant_path: Optional[str] = Field(
+        None, 
+        description="Path for Qdrant local storage. Set to None for in-memory (if on_disk is False and path is None)."
+    )
+    qdrant_on_disk: Optional[bool] = Field(
+        False, 
+        description="Whether Qdrant should store data on disk. If False and path is None, attempts in-memory."
+    )
+    qdrant_collection_name: Optional[str] = Field(
+        "mem0_default_collection", 
+        description="Name of the Qdrant collection to use. Helps isolate test data."
+    )
+    qdrant_embedding_model_dims: Optional[int] = Field(
+        None, 
+        description="Dimension for Qdrant collection vectors, e.g., 384 for all-MiniLM-L6-v2. Corresponds to 'embedding_model_dims' in Qdrant config via Mem0."
+    )
+    mem0_version: str = Field("v1.1", description="Mem0 configuration version.")
+    llm_provider: str = Field("openai", description="LLM provider for Mem0 (e.g., 'openai', 'ollama').")
+    llm_model: str = Field("gpt-4o-mini", description="LLM model name for Mem0 (e.g., 'gpt-4o-mini' for OpenAI, 'llama3' for Ollama). Ensure the model is available for the chosen provider.")
+    llm_temperature: float = Field(0.1, description="LLM temperature for Mem0.")
+    llm_base_url: Optional[str] = Field(None, description="Base URL for the LLM provider, if not default (e.g., for a self-hosted Ollama instance on a different port/host).")
+    # Future consideration: host/port for remote Qdrant
+    # qdrant_host: Optional[str] = Field(None, description="Hostname for a remote Qdrant instance.")
+    # qdrant_port: Optional[int] = Field(None, description="Port for a remote Qdrant instance.")
+
+    # Placeholder for other Mem0 specific configurations if needed
+    # model_name: Optional[str] = Field(None, description="Model to use for Mem0 AI.")
     # extra_params: Dict[str, Any] = Field({}, description="Any extra parameters for Mem0 initialization.")
 
 class Settings(BaseModel):
