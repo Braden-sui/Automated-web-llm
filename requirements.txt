@@ -1,0 +1,7 @@
+playwright
+python-dotenv
+pydantic
+playwright-stealth>=1.0.0
+transformers
+Pillow
+pytesseract

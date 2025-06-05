@@ -1,0 +1,17 @@
+{
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "platform": "MacIntel",
+    "languages": [
+        "en-US",
+        "en;q=0.9"
+    ],
+    "timezone": "America/New_York",
+    "viewport": {
+        "width": 2544,
+        "height": 1460
+    },
+    "webgl": {
+        "vendor": "Google Inc. (Intel)",
+        "renderer": "ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    }
+}

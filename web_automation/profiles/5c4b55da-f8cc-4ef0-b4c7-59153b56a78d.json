@@ -1,0 +1,18 @@
+{
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "platform": "Win32",
+    "languages": [
+        "fr-FR",
+        "fr;q=0.9",
+        "en;q=0.8"
+    ],
+    "timezone": "America/New_York",
+    "viewport": {
+        "width": 1709,
+        "height": 1032
+    },
+    "webgl": {
+        "vendor": "Google Inc. (Intel)",
+        "renderer": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    }
+}
