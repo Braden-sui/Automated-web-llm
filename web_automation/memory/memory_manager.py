@@ -1,14 +1,14 @@
 from mem0 import Memory
 import logging
 import os
-from web_automation.config.config_models import Mem0AIConfig
+from web_automation.config.config_models import Mem0AdapterConfig
 
 logger = logging.getLogger(__name__)
 
-class BrowserMemoryManager:
-    def __init__(self, mem0_config: Mem0AIConfig = None):
+class Mem0BrowserAdapter:
+    def __init__(self, mem0_config: Mem0AdapterConfig = None):
         """
-        Initializes the BrowserMemoryManager.
+        Initializes the Mem0BrowserAdapter.
 
         Args:
             mem0_config: Configuration object for Mem0 AI.
@@ -85,7 +85,7 @@ class BrowserMemoryManager:
             
         try:
             self.memory.add(
-                data=f"Automation pattern {result_text}: {pattern}", 
+                f"Automation pattern {result_text}: {pattern}", 
                 user_id=user_id, 
                 metadata=full_metadata
             )
@@ -100,18 +100,42 @@ class BrowserMemoryManager:
             return [] # Return empty list or handle error appropriately
         
         try:
-            results = self.memory.search(query=query, user_id=user_id, limit=limit)
-            
+            raw_output = self.memory.search(query=query, user_id=user_id, limit=limit)
+            logger.debug(f"Raw output from mem0.search for {user_id} with query '{query}': {raw_output}")
+            results_list = []
+
+            if isinstance(raw_output, dict) and 'results' in raw_output and isinstance(raw_output['results'], list):
+                results_list = raw_output['results']
+            elif isinstance(raw_output, list):
+                results_list = raw_output # Older behavior or direct list
+            else:
+                logger.warning(f"Unexpected output format from mem0.search for {user_id} with query '{query}': {type(raw_output)} - {raw_output}")
+                return [] # Return empty list on unexpected format
+
             if metadata_filter:
                 filtered_results = []
-                for res in results:
-                    if res.get('metadata') and all(item in res['metadata'].items() for item in metadata_filter.items()):
-                        filtered_results.append(res)
-                logger.debug(f"Searched memory for {user_id} with query '{query}', filter {metadata_filter}. Found {len(filtered_results)} after filtering.")
+                for res_idx, res_item in enumerate(results_list):
+                    try:
+                        if isinstance(res_item, dict) and res_item.get('metadata') and all(item in res_item['metadata'].items() for item in metadata_filter.items()):
+                            filtered_results.append(res_item)
+                        elif not isinstance(res_item, dict):
+                            logger.warning(f"Search result item at index {res_idx} is not a dict: {res_item}")
+                    except Exception as item_exc:
+                        logger.error(f"Error processing search result item at index {res_idx}: {res_item}. Exception: {item_exc}")
+                logger.debug(f"Searched memory for {user_id} with query '{query}', filter {metadata_filter}. Found {len(filtered_results)} after filtering from {len(results_list)} raw results.")
                 return filtered_results
             else:
-                logger.debug(f"Searched memory for {user_id} with query '{query}'. Found {len(results)}.")
-                return results
+                # Ensure all items in results_list are dicts if no filter is applied, or handle non-dicts gracefully
+                # For now, assume if no filter, client expects list of dicts or whatever mem0 returns in 'results'
+                # Adding a simple check to ensure it's a list of dicts primarily
+                processed_results_list = []
+                for res_idx, res_item in enumerate(results_list):
+                    if isinstance(res_item, dict):
+                        processed_results_list.append(res_item)
+                    else:
+                        logger.warning(f"Search result item at index {res_idx} (no filter) is not a dict: {res_item}. Skipping.")
+                logger.debug(f"Searched memory for {user_id} with query '{query}'. Found {len(processed_results_list)} items.")
+                return processed_results_list
         except Exception as e:
             logger.error(f"Error searching memory for {user_id} with query '{query}': {e}")
             return []
@@ -130,11 +154,28 @@ class BrowserMemoryManager:
             return []
         
         try:
-            memories = self.memory.get_all(user_id=session_id, limit=limit)
-            session_memories = [
-                m['memory'] for m in memories 
-                if m.get('metadata', {}).get('type') == 'session'
-            ]
+            raw_output = self.memory.get_all(user_id=session_id, limit=limit)
+            logger.debug(f"Raw output from mem0.get_all for {session_id}: {raw_output}")
+            session_memories = []
+            memories_list = []
+
+            if isinstance(raw_output, dict) and 'results' in raw_output and isinstance(raw_output['results'], list):
+                memories_list = raw_output['results']
+            elif isinstance(raw_output, list):
+                # Older behavior, or direct list of memories
+                memories_list = raw_output
+            else:
+                logger.warning(f"Unexpected output format from mem0.get_all for {session_id}: {type(raw_output)} - {raw_output}")
+                # Fall through to return empty session_memories
+
+            for m_idx, m in enumerate(memories_list):
+                try:
+                    if isinstance(m, dict) and m.get('metadata', {}).get('type') == 'session':
+                        session_memories.append(m['memory'])
+                    elif not isinstance(m, dict):
+                        logger.warning(f"Memory item at index {m_idx} is not a dict: {m}")
+                except Exception as item_exc:
+                    logger.error(f"Error processing memory item at index {m_idx}: {m}. Exception: {item_exc}")
             logger.debug(f"Retrieved {len(session_memories)} session context items for {session_id}.")
             return session_memories
         except Exception as e:

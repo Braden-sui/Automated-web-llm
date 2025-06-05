@@ -8,7 +8,7 @@ from .exceptions import VisionModelUnavailable, CaptchaSolveFailed
 
 logger = logging.getLogger(__name__)
 
-class VisionCaptchaSolver:
+class OllamaVisionSolver:
     """
     Local vision model integration for solving image CAPTCHAs.
     Supports multiple backends: Ollama, Transformers, OCR fallback.

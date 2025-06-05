@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from web_automation import create_browser_agent
+from web_automation import create_playwright_agent
 # The plan mentions ClickInstruction and ActionType, but they are not directly used in the test_memory_enhanced_agent.
 # If they were needed for constructing instructions to pass to an agent method, they would be imported from:
 # from web_automation.models.instructions import ClickInstruction, ActionType 
@@ -10,7 +10,7 @@ async def test_memory_enhanced_agent():
     """Test memory-enhanced agent basic functionality"""
     # Ensure awm_config is enabled for this test if it relies on AWM_ENABLED=true in .env
     # Alternatively, could mock settings.awm_config.ENABLED to be True for this test.
-    agent = create_browser_agent(memory_enabled=True, headless=True)
+    agent = create_playwright_agent(memory_enabled=True, headless=True)
     
     async with agent: # WebBrowserAgent likely implements __aenter__ and __aexit__
         # Test navigation with memory (or standard navigation if memory doesn't alter it)
@@ -39,7 +39,7 @@ async def test_memory_enhanced_agent():
 @pytest.mark.asyncio  
 async def test_standard_agent_compatibility():
     """Test that standard agent still works without memory"""
-    agent = create_browser_agent(memory_enabled=False, headless=True)
+    agent = create_playwright_agent(memory_enabled=False, headless=True)
     
     async with agent:
         if agent._page:

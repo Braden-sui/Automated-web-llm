@@ -1,0 +1,17 @@
+{
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "platform": "MacIntel",
+    "languages": [
+        "en-CA",
+        "en;q=0.7"
+    ],
+    "timezone": "America/Los_Angeles",
+    "viewport": {
+        "width": 2588,
+        "height": 1433
+    },
+    "webgl": {
+        "vendor": "Google Inc. (NVIDIA)",
+        "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    }
+}

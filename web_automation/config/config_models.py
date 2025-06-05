@@ -33,7 +33,7 @@ class GeneralConfig(BaseModel):
     LOG_LEVEL: str = Field("INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     PROFILES_DIR: str = Field("web_automation/profiles", description="Directory to store user profiles")
 
-class Mem0AIConfig(BaseModel):
+class Mem0AdapterConfig(BaseModel):
     api_key: Optional[str] = Field(None, description="API key for Mem0 AI. If None, mem0ai might use environment variables.")
     agent_id: Optional[str] = Field(None, description="Specific agent ID for Mem0 AI, if applicable.")
     # Add other relevant Mem0 configuration parameters here
@@ -45,7 +45,7 @@ class Settings(BaseModel):
     proxy_config: ProxyConfig = Field(default_factory=ProxyConfig)
     anti_detection_config: AntiDetectionConfig = Field(default_factory=AntiDetectionConfig)
     general_config: GeneralConfig = Field(default_factory=GeneralConfig)
-    mem0ai_config: Mem0AIConfig = Field(default_factory=Mem0AIConfig) # New config
+    mem0ai_config: Mem0AdapterConfig = Field(default_factory=Mem0AdapterConfig) # New config
 
 # Example of how settings might be loaded (e.g., in a main config file or __init__.py)
 # settings = Settings()

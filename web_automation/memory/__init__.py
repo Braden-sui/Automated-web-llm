@@ -1,7 +1,7 @@
-from .memory_enhanced_agent import MemoryEnhancedWebBrowserAgent
-from .memory_manager import BrowserMemoryManager
+from .memory_manager import Mem0BrowserAdapter
+# PersistentMemoryBrowserAgent can be imported directly from .memory_enhanced_agent
 
 __all__ = [
-    "MemoryEnhancedWebBrowserAgent",
-    "BrowserMemoryManager",
+    "PersistentMemoryBrowserAgent",
+    "Mem0BrowserAdapter",
 ]

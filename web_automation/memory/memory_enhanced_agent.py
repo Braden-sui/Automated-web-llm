@@ -2,16 +2,16 @@ import logging
 import re
 from typing import Optional
 
-from ..core.browser_agent import WebBrowserAgent, BrowserAgentError
-from .memory_manager import BrowserMemoryManager
-from ..config.config_models import Mem0AIConfig
+from ..core.browser_agent import PlaywrightBrowserAgent, BrowserAgentError
+from .memory_manager import Mem0BrowserAdapter
+from ..config.config_models import Mem0AdapterConfig
 
 logger = logging.getLogger(__name__)
 
-class MemoryEnhancedWebBrowserAgent(WebBrowserAgent):
-    """WebBrowserAgent with additional helpers that utilise the BrowserMemoryManager."""
+class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
+    """PlaywrightBrowserAgent with additional helpers that utilise the Mem0BrowserAdapter."""
 
-    def __init__(self, mem0_config: Optional[Mem0AIConfig] = None, **kwargs):
+    def __init__(self, mem0_config: Optional[Mem0AdapterConfig] = None, **kwargs):
         # Always enable memory for the enhanced agent
         kwargs.setdefault("memory_enabled", True)
         super().__init__(**kwargs)
@@ -19,7 +19,7 @@ class MemoryEnhancedWebBrowserAgent(WebBrowserAgent):
         if mem0_config is not None:
             # Recreate memory manager with provided configuration
             try:
-                self.memory_manager = BrowserMemoryManager(mem0_config=mem0_config)
+                self.memory_manager = Mem0BrowserAdapter(mem0_config=mem0_config)
                 logger.info("Memory manager initialised with custom Mem0 configuration.")
             except Exception as e:
                 logger.error(f"Failed to initialise memory manager: {e}")

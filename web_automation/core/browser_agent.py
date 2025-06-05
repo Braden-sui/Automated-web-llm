@@ -23,13 +23,13 @@ from playwright_stealth import stealth_async
 import uuid
 from web_automation.utils.url_helpers import is_similar_url, get_domain
 from web_automation.captcha.captcha_handler import CaptchaIntegration
-from web_automation.captcha.captcha_handler import SimpleCaptchaHandler
+from web_automation.captcha.captcha_handler import VisionCaptchaHandler
 from pydantic import ValidationError
-from ..memory.memory_enhanced_agent import MemoryEnhancedWebBrowserAgent
-from ..memory.memory_manager import BrowserMemoryManager
+# Import moved to factory.py to avoid circular imports
+from ..memory.memory_manager import Mem0BrowserAdapter
 
 from ..config import settings
-from ..config.settings import mem0ai_config # Import the specific config
+from ..config.settings import mem0_adapter_config # Import the specific config
 from ..models.instructions import (
     InstructionSet,
     BrowserInstruction,
@@ -73,7 +73,7 @@ class InstructionExecutionError(BrowserAgentError):
         self.message = message
         super().__init__(f"Failed to execute instruction {instruction.get('type')}: {message}")
 
-class WebBrowserAgent:
+class PlaywrightBrowserAgent:
     """
     A browser automation agent that executes JSON-based instructions using Playwright.
     """
@@ -132,18 +132,18 @@ class WebBrowserAgent:
         self._fingerprint_profile = self._load_or_create_profile()
 
         # Initialize BrowserMemoryManager
-        self.memory_manager: Optional[BrowserMemoryManager] = None
+        self.memory_manager: Optional[Mem0BrowserAdapter] = None
         self.memory_enabled = memory_enabled
         if self.memory_enabled:
             try:
                 # BrowserMemoryManager is imported at the top level now
-                self.memory_manager = BrowserMemoryManager(mem0_config=mem0ai_config)
-                logger.info(f"BrowserMemoryManager initialized for identity {self.identity_id} with mem0ai_config.")
+                self.memory_manager = Mem0BrowserAdapter(mem0_config=mem0_adapter_config)
+                logger.info(f"Mem0BrowserAdapter initialized for identity {self.identity_id} with mem0_adapter_config.")
             except Exception as e:
-                logger.error(f"Failed to initialize BrowserMemoryManager: {e}. Memory features will be disabled.")
+                logger.error(f"Failed to initialize Mem0BrowserAdapter: {e}. Memory features will be disabled.")
                 self.memory_manager = None
         else:
-            logger.info(f"BrowserMemoryManager disabled by configuration for identity_id: {self.identity_id}")
+            logger.info(f"Mem0BrowserAdapter disabled by configuration for identity_id: {self.identity_id}")
 
     def _reset_execution_state(self):
         self._screenshots = []
@@ -987,19 +987,18 @@ class WebBrowserAgent:
 
 
 # Apply CAPTCHA integration methods to the WebBrowserAgent class
-WebBrowserAgent = CaptchaIntegration.add_captcha_methods(WebBrowserAgent)
+PlaywrightBrowserAgent = CaptchaIntegration.add_captcha_methods(PlaywrightBrowserAgent)
 
 async def main():
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     
-    logger.info("Initializing WebBrowserAgent for CAPTCHA test...")
-    agent = WebBrowserAgent(headless=False, stealth=True) # Ensure headless is False for visibility
-    captcha_handler = SimpleCaptchaHandler() # Initialize the CAPTCHA handler
+    logger.info("Initializing PlaywrightBrowserAgent for CAPTCHA test...")
+    agent = PlaywrightBrowserAgent(headless=False, stealth=True) # Ensure headless is False for visibility
+    captcha_handler = VisionCaptchaHandler() # Initialize the CAPTCHA handler
 
     async with agent:
-        logger.info("WebBrowserAgent entered context. Navigating to reCAPTCHA test page...")
-        
+        logger.info("PlaywrightBrowserAgent entered context. Navigating to reCAPTCHA test page...")
         # Navigate to a reCAPTCHA v2 test page
         # You might need to find a reliable public test page, or set up your own.
         # For demonstration, we'll use a common one, but it might change or have rate limits.
@@ -1019,19 +1018,10 @@ async def main():
         logger.info("CAPTCHA handling complete. Pausing for human inspection (30 seconds)...")
         logger.info("You can inspect the browser window to see the result.")
         await asyncio.sleep(30) # Pause for human inspection
-
-        logger.info("WebBrowserAgent exited context. Test finished.")
         logger.info(f"CAPTCHA Handler Stats: {captcha_handler.get_stats()}")
 
-    logger.info("WebBrowserAgent exited context. Test finished.")
+    logger.info("PlaywrightBrowserAgent exited context. Test finished.")
 
-
-def create_browser_agent(memory_enabled: bool = True, **kwargs) -> Union[WebBrowserAgent, MemoryEnhancedWebBrowserAgent]:
-    """Factory helper returning a standard or memory-enhanced agent."""
-
-    if memory_enabled:
-        return MemoryEnhancedWebBrowserAgent(mem0_config=mem0ai_config, **kwargs)
-    return WebBrowserAgent(memory_enabled=False, **kwargs)
 
 if __name__ == "__main__":
     # Setup logging

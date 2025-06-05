@@ -5,13 +5,13 @@ from typing import Dict, Optional, Any # Changed List to Any for get_stats
 import playwright.async_api as playwright_api
 
 from .detector import ImageCaptchaDetector
-from .vision_solver import VisionCaptchaSolver
+from .vision_solver import OllamaVisionSolver
 from .exceptions import CaptchaError, CaptchaNotFound, CaptchaSolveFailed, VisionModelUnavailable
-from ..config import settings # For SimpleCaptchaHandler defaults
+from ..config import settings # For VisionCaptchaHandler defaults
 
 logger = logging.getLogger(__name__)
 
-class SimpleCaptchaHandler:
+class VisionCaptchaHandler:
     """
     Main CAPTCHA handling orchestrator.
     Coordinates detection, solving, and submission of image CAPTCHAs.
@@ -25,7 +25,7 @@ class SimpleCaptchaHandler:
         _model_to_use = vision_model_name if vision_model_name is not None else _captcha_config.CAPTCHA_VISION_MODEL_NAME
         _attempts_to_use = max_attempts_override if max_attempts_override is not None else _captcha_config.CAPTCHA_MAX_ATTEMPTS
         
-        self.solver = VisionCaptchaSolver(model_name=_model_to_use)
+        self.solver = OllamaVisionSolver(model_name=_model_to_use)
         self.max_attempts = _attempts_to_use
         
         logger.info(f"HANDLER: Initialized with vision model '{_model_to_use}' and max attempts '{_attempts_to_use}'.")
@@ -355,8 +355,8 @@ class CaptchaIntegration:
                     attempts_override = cfg.CAPTCHA_MAX_ATTEMPTS
                     logger.info(f"INTEGRATION: WebBrowserAgent using captcha_config. Model: {model_override}, Attempts: {attempts_override}")
                 else:
-                    logger.warning("INTEGRATION: WebBrowserAgent has no captcha_config. SimpleCaptchaHandler will use global defaults.")
-                self_agent._captcha_handler = SimpleCaptchaHandler(
+                    logger.warning("INTEGRATION: WebBrowserAgent has no captcha_config. VisionCaptchaHandler will use global defaults.")
+                self_agent._captcha_handler = VisionCaptchaHandler(
                     vision_model_name=model_override,
                     max_attempts_override=attempts_override
                 )
@@ -421,7 +421,7 @@ class CaptchaIntegration:
 #         # Ensure .env is loaded if settings rely on it and run from here
 #         # from dotenv import load_dotenv
 #         # load_dotenv()
-#         handler = SimpleCaptchaHandler() # Will use global settings
+#         handler = VisionCaptchaHandler() # Will use global settings
 #         async with async_playwright() as p:
 #             browser = await p.chromium.launch(headless=False)
 #             page = await browser.new_page()

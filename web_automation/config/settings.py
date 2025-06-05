@@ -191,7 +191,7 @@ awm_config = AWMConfig()
 # Instantiate Pydantic-based settings
 # This will load .env variables for Pydantic models if not explicitly passed
 pydantic_settings = PydanticSettings()
-mem0ai_config = pydantic_settings.mem0ai_config
+mem0_adapter_config = pydantic_settings.mem0ai_config
 
 # Ensure necessary directories exist
 for directory in [general_config.SCREENSHOTS_DIR, general_config.DOWNLOADS_DIR, general_config.LOGS_DIR]:
@@ -219,11 +219,13 @@ def validate_config():
 # Export commonly used configs
 __all__ = [
     'anti_detection_config',
-    'external_captcha_service_config', 
+    'external_captcha_service_config',
     'browser_config',
+    'general_config',
+    'proxy_config',
     'security_config',
     'awm_config',
-    'captcha_config', # Added captcha_config to exports
-    'mem0ai_config', # Added mem0ai_config to exports
+    'captcha_config',
+    'mem0_adapter_config',
     'validate_config'
 ]

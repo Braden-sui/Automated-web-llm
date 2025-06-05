@@ -3,7 +3,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from .core.browser_agent import WebBrowserAgent
+from .core.browser_agent import PlaywrightBrowserAgent
 from .config.settings import general_config
 
 # Setup basic logging for the test script
@@ -21,7 +21,7 @@ async def main(identity_id: str):
     # No need to explicitly create it here if using the agent's default behavior.
     # Path(browser_config.PROFILES_DIR_NAME).mkdir(parents=True, exist_ok=True)
 
-    agent = WebBrowserAgent(
+    agent = PlaywrightBrowserAgent(
         identity_id=identity_id,
         headless=False,  # Run in headed mode for visual inspection
         stealth=True
@@ -29,7 +29,7 @@ async def main(identity_id: str):
 
     try:
         await agent.initialize()
-        logger.info(f"WebBrowserAgent initialized for identity: {identity_id}")
+        logger.info(f"PlaywrightBrowserAgent initialized for identity: {identity_id}")
         logger.info(f"Fingerprint Profile Used: {agent._fingerprint_profile}")
 
         # Navigate to a fingerprint testing site
@@ -50,7 +50,7 @@ async def main(identity_id: str):
         logger.info(f"--- Test Finished for Identity ID: {identity_id} ---")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test WebBrowserAgent stealth and persistent profiles.")
+    parser = argparse.ArgumentParser(description="Test PlaywrightBrowserAgent stealth and persistent profiles.")
     parser.add_argument("--identity-id", type=str, required=True, help="The AI digital identity ID to use for the test.")
     args = parser.parse_args()
 

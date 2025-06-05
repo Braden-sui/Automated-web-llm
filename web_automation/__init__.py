@@ -1,5 +1,6 @@
-from .core.browser_agent import WebBrowserAgent, create_browser_agent
-from .memory.memory_enhanced_agent import MemoryEnhancedWebBrowserAgent
+from .core.browser_agent import PlaywrightBrowserAgent
+from .core.factory import create_playwright_agent
+from .memory.memory_enhanced_agent import PersistentMemoryBrowserAgent
 from .config.settings import (
     anti_detection_config,
     browser_config,
@@ -9,9 +10,9 @@ from .config.settings import (
 )
 
 __all__ = [
-    "WebBrowserAgent",
-    "MemoryEnhancedWebBrowserAgent",
-    "create_browser_agent",
+    "PlaywrightBrowserAgent",
+    "PersistentMemoryBrowserAgent",
+    "create_playwright_agent",
     "anti_detection_config",
     "browser_config",
     "general_config",
