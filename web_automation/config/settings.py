@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from web_automation.config.config_models import Settings as PydanticSettings # Alias to avoid naming conflict
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -130,6 +131,27 @@ class SecurityConfig:
     ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "True").lower() == "true"
     REQUESTS_PER_MINUTE = int(os.getenv("REQUESTS_PER_MINUTE", "30"))
 
+class AWMConfig(BaseModel):
+    """Configuration for Agent Workflow Memory integration"""
+    ENABLED: bool = os.getenv("AWM_ENABLED", "True").lower() == "true"
+    
+    # Memory backend configuration
+    BACKEND: str = os.getenv("AWM_BACKEND", "sqlite")
+    DATABASE_URL: str = os.getenv("AWM_DATABASE_URL", "sqlite:///./awm_memory.db")
+    
+    # Memory retention settings
+    INTERACTION_RETENTION_DAYS: int = int(os.getenv("AWM_INTERACTION_RETENTION_DAYS", "30"))
+    WORKFLOW_RETENTION_DAYS: int = int(os.getenv("AWM_WORKFLOW_RETENTION_DAYS", "90"))
+    CAPTCHA_RETENTION_DAYS: int = int(os.getenv("AWM_CAPTCHA_RETENTION_DAYS", "180"))
+    
+    # Learning thresholds
+    MIN_SUCCESS_RATE_THRESHOLD: float = float(os.getenv("AWM_MIN_SUCCESS_RATE", "0.7"))
+    MIN_SAMPLES_FOR_LEARNING: int = int(os.getenv("AWM_MIN_SAMPLES", "3"))
+    
+    # Performance settings
+    MAX_QUERY_RESULTS: int = int(os.getenv("AWM_MAX_QUERY_RESULTS", "100"))
+    MEMORY_CLEANUP_INTERVAL_HOURS: int = int(os.getenv("AWM_CLEANUP_INTERVAL", "24"))
+
 # Instantiate configs for easy import
 
 class CaptchaConfig(BaseModel):
@@ -164,6 +186,12 @@ general_config = GeneralConfig()
 proxy_config = ProxyConfig()
 captcha_config = CaptchaConfig() # New local vision CAPTCHA config
 security_config = SecurityConfig()
+awm_config = AWMConfig()
+
+# Instantiate Pydantic-based settings
+# This will load .env variables for Pydantic models if not explicitly passed
+pydantic_settings = PydanticSettings()
+mem0ai_config = pydantic_settings.mem0ai_config
 
 # Ensure necessary directories exist
 for directory in [general_config.SCREENSHOTS_DIR, general_config.DOWNLOADS_DIR, general_config.LOGS_DIR]:
@@ -193,9 +221,9 @@ __all__ = [
     'anti_detection_config',
     'external_captcha_service_config', 
     'browser_config',
-    'general_config',
-    'proxy_config',
     'security_config',
-    'captcha_config', # New local vision CAPTCHA config
+    'awm_config',
+    'captcha_config', # Added captcha_config to exports
+    'mem0ai_config', # Added mem0ai_config to exports
     'validate_config'
 ]

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Callable
@@ -24,8 +25,11 @@ from web_automation.utils.url_helpers import is_similar_url, get_domain
 from web_automation.captcha.captcha_handler import CaptchaIntegration
 from web_automation.captcha.captcha_handler import SimpleCaptchaHandler
 from pydantic import ValidationError
+# from ..memory.memory_enhanced_agent import MemoryEnhancedWebBrowserAgent # Old, to be removed
+from ..memory.memory_manager import BrowserMemoryManager
 
 from ..config import settings
+from ..config.settings import mem0ai_config # Import the specific config
 from ..models.instructions import (
     InstructionSet,
     BrowserInstruction,
@@ -86,7 +90,8 @@ class WebBrowserAgent:
         downloads_path: Optional[str] = None,
         randomize_fingerprint: Optional[bool] = None, 
         custom_fingerprint_script: Optional[str] = None,
-        identity_id: Optional[str] = None
+        identity_id: Optional[str] = None,
+        memory_enabled: bool = True  # New parameter
     ):
         self.identity_id = identity_id or str(uuid.uuid4())
         self.browser_type = (browser_type or settings.browser_config.DEFAULT_BROWSER_TYPE).lower()
@@ -125,6 +130,20 @@ class WebBrowserAgent:
     
         self._reset_execution_state()
         self._fingerprint_profile = self._load_or_create_profile()
+
+        # Initialize BrowserMemoryManager
+        self.memory_manager: Optional[BrowserMemoryManager] = None
+        self.memory_enabled = memory_enabled
+        if self.memory_enabled:
+            try:
+                # BrowserMemoryManager is imported at the top level now
+                self.memory_manager = BrowserMemoryManager(mem0_config=mem0ai_config)
+                logger.info(f"BrowserMemoryManager initialized for identity {self.identity_id} with mem0ai_config.")
+            except Exception as e:
+                logger.error(f"Failed to initialize BrowserMemoryManager: {e}. Memory features will be disabled.")
+                self.memory_manager = None
+        else:
+            logger.info(f"BrowserMemoryManager disabled by configuration for identity_id: {self.identity_id}")
 
     def _reset_execution_state(self):
         self._screenshots = []
@@ -178,17 +197,17 @@ class WebBrowserAgent:
     async def _human_like_delay(self, min_ms: Optional[int] = None, max_ms: Optional[int] = None, base_delay_type: str = "before"):
         """Introduces a random delay. Uses config defaults if min/max not provided."""
         if base_delay_type == "before":
-            min_d = min_ms if min_ms is not None else anti_detection_config.MIN_DELAY_BEFORE_ACTION
-            max_d = max_ms if max_ms is not None else anti_detection_config.MAX_DELAY_BEFORE_ACTION
+            min_d = min_ms if min_ms is not None else settings.anti_detection_config.MIN_DELAY_BEFORE_ACTION
+            max_d = max_ms if max_ms is not None else settings.anti_detection_config.MAX_DELAY_BEFORE_ACTION
         elif base_delay_type == "after":
-            min_d = min_ms if min_ms is not None else anti_detection_config.MIN_DELAY_AFTER_ACTION
-            max_d = max_ms if max_ms is not None else anti_detection_config.MAX_DELAY_AFTER_ACTION
+            min_d = min_ms if min_ms is not None else settings.anti_detection_config.MIN_DELAY_AFTER_ACTION
+            max_d = max_ms if max_ms is not None else settings.anti_detection_config.MAX_DELAY_AFTER_ACTION
         elif base_delay_type == "typing":
-            min_d = min_ms if min_ms is not None else anti_detection_config.MIN_TYPING_DELAY_PER_CHAR
-            max_d = max_ms if max_ms is not None else anti_detection_config.MAX_TYPING_DELAY_PER_CHAR
+            min_d = min_ms if min_ms is not None else settings.anti_detection_config.MIN_TYPING_DELAY_PER_CHAR
+            max_d = max_ms if max_ms is not None else settings.anti_detection_config.MAX_TYPING_DELAY_PER_CHAR
         else: # Default to 'before' action style delays
-            min_d = min_ms if min_ms is not None else anti_detection_config.MIN_DELAY_BEFORE_ACTION
-            max_d = max_ms if max_ms is not None else anti_detection_config.MAX_DELAY_BEFORE_ACTION
+            min_d = min_ms if min_ms is not None else settings.anti_detection_config.MIN_DELAY_BEFORE_ACTION
+            max_d = max_ms if max_ms is not None else settings.anti_detection_config.MAX_DELAY_BEFORE_ACTION
 
         if min_d == 0 and max_d == 0: # Explicitly no delay
             return
@@ -336,9 +355,233 @@ class WebBrowserAgent:
         logger.info("STEALTH: _enable_stealth completed using playwright-stealth.")
         print("STEALTH: _enable_stealth completed using playwright-stealth.")
 
+    async def _apply_memory_context(self, instruction_data, memories: List[Dict]) -> any:
+        """
+        Dynamically modify instruction based on retrieved memories.
+        This is where the magic happens - memories actually improve performance!
+        """
+        if not memories:
+            return instruction_data
+        
+        # Create a mutable copy of the instruction
+        enhanced_instruction = instruction_data.copy() if hasattr(instruction_data, 'copy') else instruction_data
+        
+        # Extract learned patterns from memories
+        for memory in memories:
+            memory_text = memory.get('memory', '')
+            
+            # Speed optimization from memory
+            if 'slow clicking preferred' in memory_text.lower():
+                if hasattr(enhanced_instruction, 'delay'):
+                    enhanced_instruction.delay = max(getattr(enhanced_instruction, 'delay', 0) or 0, 2.0)
+                    logger.info(f"Applied memory: increased delay to {enhanced_instruction.delay}s")
+            
+            # Selector optimization from memory
+            if 'successful selector:' in memory_text.lower():
+                # Extract successful selector from memory
+                success_match = re.search(r'successful selector: ([^\s]+)', memory_text)
+                if success_match and hasattr(enhanced_instruction, 'selector'):
+                    learned_selector = success_match.group(1)
+                    if getattr(enhanced_instruction, 'selector', None) != learned_selector:
+                        logger.info(f"Applying learned selector: {learned_selector}")
+                        enhanced_instruction.selector = learned_selector
+            
+            # Wait strategy from memory
+            if 'wait strategy:' in memory_text.lower():
+                wait_match = re.search(r'wait strategy: (\d+)', memory_text)
+                if wait_match:
+                    learned_wait = int(wait_match.group(1))
+                    if hasattr(enhanced_instruction, 'wait_time'):
+                        current_wait = getattr(enhanced_instruction, 'wait_time', 0) or 0
+                        enhanced_instruction.wait_time = max(current_wait, learned_wait)
+                        logger.info(f"Applied memory: wait time {learned_wait}ms")
+        
+        return enhanced_instruction
+
+    async def _store_execution_success(self, instruction_data, execution_time: float):
+        """Store successful execution patterns for future learning"""
+        if not self.memory_manager:
+            return
+        
+        try:
+            # Store timing optimization
+            instruction_type = getattr(instruction_data, 'type', 'unknown')
+            instruction_type_str = instruction_type.value if hasattr(instruction_type, 'value') else str(instruction_type)
+            
+            timing_pattern = f"Successful timing for {instruction_type_str}: {execution_time:.2f}s"
+            
+            # Store selector success
+            if hasattr(instruction_data, 'selector') and getattr(instruction_data, 'selector', None):
+                selector_pattern = f"Successful selector: {instruction_data.selector} for {instruction_type_str}"
+                self.memory_manager.store_automation_pattern(
+                    pattern=selector_pattern,
+                    success=True,
+                    user_id=self.identity_id,
+                    metadata={"timing": execution_time, "instruction_type": instruction_type_str}
+                )
+            
+            # Store general success pattern
+            self.memory_manager.store_automation_pattern(
+                pattern=timing_pattern,
+                success=True,
+                user_id=self.identity_id,
+                metadata={"execution_time": execution_time}
+            )
+        except Exception as e:
+            logger.error(f"Error storing execution success: {e}")
+
+    async def _handle_execution_failure(self, instruction_data, error: Exception):
+        """Learn from failures and suggest improvements"""
+        if not self.memory_manager:
+            return
+        
+        try:
+            error_type = type(error).__name__
+            error_message = str(error)
+            
+            instruction_type = getattr(instruction_data, 'type', 'unknown')
+            instruction_type_str = instruction_type.value if hasattr(instruction_type, 'value') else str(instruction_type)
+            
+            # Store failure pattern
+            failure_pattern = f"Failed {instruction_type_str}: {error_type} - {error_message[:100]}"
+            
+            # Check for similar past failures
+            similar_failures = self.memory_manager.search_memory(
+                query=f"Failed {instruction_type_str} {error_type}",
+                user_id=self.identity_id,
+                limit=3
+            )
+            
+            if len(similar_failures) >= 2:  # Pattern detected
+                logger.warning(f"Repeated failure pattern detected for {instruction_type_str}")
+                
+                # Suggest alternative approach
+                suggestion = self._generate_failure_suggestion(instruction_data, similar_failures)
+                if suggestion:
+                    self.memory_manager.store_automation_pattern(
+                        pattern=f"Suggested fix for {instruction_type_str}: {suggestion}",
+                        success=True,  # This is a positive suggestion
+                        user_id=self.identity_id,
+                        metadata={"type": "suggestion", "original_error": error_type}
+                    )
+            
+            # Store this failure
+            self.memory_manager.store_automation_pattern(
+                pattern=failure_pattern,
+                success=False,
+                user_id=self.identity_id,
+                metadata={"error_type": error_type}
+            )
+        except Exception as e:
+            logger.error(f"Error handling execution failure: {e}")
+
+    def _generate_failure_suggestion(self, instruction_data, similar_failures: List[Dict]) -> str:
+        """Generate actionable suggestions based on failure patterns"""
+        try:
+            error_types = [f.get('metadata', {}).get('error_type', '') for f in similar_failures]
+            
+            if 'TimeoutError' in error_types:
+                return "increase wait time or use explicit wait conditions"
+            elif 'ElementNotFoundError' in error_types:
+                return "try alternative selector strategy or wait for element visibility"
+            elif 'StaleElementReferenceError' in error_types:
+                return "re-find element before interaction"
+            else:
+                return "consider adding retry logic or human-like delays"
+        except Exception:
+            return "review automation strategy"
+
+    async def _execute_instruction_with_memory(self, instruction_data, user_id: str) -> None:
+        """Memory-enhanced instruction execution with dynamic optimization"""
+        memories = []
+        if self.memory_manager:
+            try:
+                # Search for relevant patterns
+                instruction_type = getattr(instruction_data, 'type', 'unknown')
+                instruction_type_str = instruction_type.value if hasattr(instruction_type, 'value') else str(instruction_type)
+                
+                search_query = f"{instruction_type_str}"
+                if hasattr(instruction_data, 'selector') and getattr(instruction_data, 'selector', None):
+                    search_query += f" {instruction_data.selector}"
+                
+                memories = self.memory_manager.search_automation_patterns(
+                    pattern_query=search_query,
+                    user_id=user_id,
+                    limit=5
+                )
+                
+                if memories:
+                    logger.info(f"Found {len(memories)} relevant memories for {instruction_type_str}")
+            except Exception as e:
+                logger.error(f"Error searching automation patterns: {e}")
+        
+        # Apply memory insights to instruction
+        enhanced_instruction = await self._apply_memory_context(instruction_data, memories)
+        
+        # Execute with timing measurement
+        start_time = time.time()
+        action_type = getattr(enhanced_instruction, 'type', getattr(instruction_data, 'type'))
+        handler = self._get_action_handler(action_type)
+        
+        if not handler:
+            error_msg = f"No handler found for action type '{action_type.value if hasattr(action_type, 'value') else action_type}'"
+            logger.error(error_msg)
+            await self._handle_execution_failure(enhanced_instruction, Exception(error_msg))
+            self._errors.append({
+                "type": "UnsupportedInstructionError",
+                "instruction_type": action_type.value if hasattr(action_type, 'value') else str(action_type),
+                "message": error_msg
+            })
+            raise InstructionExecutionError(
+                getattr(enhanced_instruction, 'dict', lambda: {})(), 
+                error_msg
+            )
+        
+        try:
+            # Execute the enhanced instruction
+            if action_type not in [ActionType.WAIT, ActionType.EVALUATE]:
+                await self._human_like_delay(base_delay_type="before")
+                
+            await handler(enhanced_instruction)
+            self._actions_completed += 1
+            
+            if action_type not in [ActionType.WAIT, ActionType.EVALUATE]:
+                await self._human_like_delay(base_delay_type="after")
+            
+            # Record success
+            execution_time = time.time() - start_time
+            await self._store_execution_success(enhanced_instruction, execution_time)
+            
+            action_type_str = action_type.value if hasattr(action_type, 'value') else str(action_type)
+            logger.debug(f"Successfully executed {action_type_str} in {execution_time:.2f}s with memory enhancement")
+            
+        except Exception as e:
+            # Learn from failure
+            await self._handle_execution_failure(enhanced_instruction, e)
+            
+            # Handle errors consistently with previous implementation
+            if isinstance(e, InstructionExecutionError):
+                logger.error(f"InstructionExecutionError for {action_type.value if hasattr(action_type, 'value') else str(action_type)} ({getattr(enhanced_instruction, 'selector', 'N/A')}): {getattr(e, 'message', str(e))}")
+                self._errors.append({
+                    "type": "InstructionExecutionError", 
+                    "instruction_type": getattr(e, 'instruction', {}).get('type', str(action_type)),
+                    "selector": getattr(e, 'instruction', {}).get('selector', getattr(enhanced_instruction, 'selector', 'N/A')),
+                    "message": getattr(e, 'message', str(e))
+                })
+            else:
+                logger.error(f"GenericError during {action_type.value if hasattr(action_type, 'value') else str(action_type)} ({getattr(enhanced_instruction, 'selector', 'N/A')}): {str(e)}", exc_info=True)
+                self._errors.append({
+                    "type": "GenericError",
+                    "instruction_type": action_type.value if hasattr(action_type, 'value') else str(action_type),
+                    "message": str(e)
+                })
+            
+            raise  # Re-raise for normal error handling
+
     async def execute_instructions(self, instructions_json: Union[Dict, InstructionSet]) -> Dict:
         self._reset_execution_state()
         self._execution_start_time = time.time()
+        current_session_context = {"initial_url": None, "history": []}
 
         if isinstance(instructions_json, dict):
             try:
@@ -356,53 +599,84 @@ class WebBrowserAgent:
             self._errors.append({"type": "BrowserError", "message": "Page not initialized."})
             return self._prepare_result(success=False)
 
+        if self.memory_manager:
+            logger.info(f"MEMORY: Retrieving session context for user {self.identity_id}")
+            retrieved_contexts = await self.memory_manager.search_session_context(
+                user_id=self.identity_id,
+                query="last known state or initial context", # General query
+                limit=1 
+            )
+            if retrieved_contexts and retrieved_contexts[0].get("data"):
+                # Ensure data is a dict
+                retrieved_data = retrieved_contexts[0]["data"]
+                if isinstance(retrieved_data, str):
+                    try:
+                        current_session_context.update(json.loads(retrieved_data))
+                    except json.JSONDecodeError:
+                         logger.warning(f"MEMORY: Failed to parse retrieved session context string: {retrieved_data}")
+                         current_session_context.update({"raw_retrieved_context": retrieved_data}) # store as is
+                elif isinstance(retrieved_data, dict):
+                     current_session_context.update(retrieved_data)
+                else:
+                    logger.warning(f"MEMORY: Retrieved session context data is not a dict or parsable string: {type(retrieved_data)}")
+                    current_session_context.update({"raw_retrieved_context": str(retrieved_data)})
+
+                logger.info(f"MEMORY: Retrieved and updated session context: {current_session_context}")
+        
+        current_session_context["initial_url"] = instruction_set.url or (self._page.url if self._page else None)
+
         if instruction_set.url:
-            try:
-                await self._handle_navigate(NavigateInstruction(type=ActionType.NAVIGATE, url=instruction_set.url))
-            except Exception as e:
-                self._errors.append({"type": "NavigationError", "message": str(e), "url": instruction_set.url})
+            nav_instruction = NavigateInstruction(type=ActionType.NAVIGATE, url=instruction_set.url)
+            logger.info(f"Executing initial navigation to: {instruction_set.url}")
+            success = await self._execute_instruction_with_memory(nav_instruction, current_session_context)
+            if not success:
                 return self._prepare_result(success=False)
+            current_session_context["history"].append({
+                "action": ActionType.NAVIGATE.value, 
+                "url": instruction_set.url, 
+                "status": "success",
+                "timestamp": time.time()
+            })
+            current_session_context["last_known_url"] = self._page.url if self._page else instruction_set.url
 
         for instruction_data in instruction_set.instructions:
-            try:
-                action_type = ActionType(instruction_data.type)
-                handler = self._get_action_handler(action_type)
+            logger.info(f"Executing instruction: {instruction_data.type.value} - Selector: {getattr(instruction_data, 'selector', 'N/A')}")
+            success = await self._execute_instruction_with_memory(instruction_data, current_session_context)
+            
+            action_details_for_history = instruction_data.dict()
+            if 'type' in action_details_for_history and isinstance(action_details_for_history['type'], Enum):
+                 action_details_for_history['type'] = action_details_for_history['type'].value
 
-                if not handler:
-                    logger.error(f"Unsupported instruction type: {action_type.value}")
-                    self._errors.append({
-                        "type": "UnsupportedInstructionError",
-                        "instruction_type": action_type.value,
-                        "message": f"No handler found for action type '{action_type.value}'"
-                    })
-                    continue # Skip to the next instruction
+            current_session_context["history"].append({
+                "instruction": action_details_for_history,
+                "status": "success" if success else "failure",
+                "timestamp": time.time(),
+                "current_url": self._page.url if self._page else current_session_context.get("last_known_url")
+            })
+            
+            if not success:
+                return self._prepare_result(success=False) # Stop on first error
+            
+            current_session_context["last_known_url"] = self._page.url if self._page else current_session_context.get("last_known_url")
+            current_session_context["last_successful_action"] = action_details_for_history
 
-                # Apply pre-action delay for most actions
-                if action_type not in [ActionType.WAIT, ActionType.EVALUATE]: # Don't delay before wait or eval
-                    await self._human_like_delay(base_delay_type="before")
-
-                await handler(instruction_data)
-                self._actions_completed += 1
-                await self._human_like_delay(base_delay_type="after")
-            except InstructionExecutionError as e:
-                self._errors.append({
-                    "type": "InstructionExecutionError", 
-                    "instruction_type": e.instruction.get('type'),
-                    "selector": e.instruction.get('selector'),
-                    "message": e.message
-                })
-                # Optionally, decide whether to stop or continue on error
-                # For now, let's stop on first error
-                return self._prepare_result(success=False)
-            except Exception as e:
-                self._errors.append({
-                    "type": "GenericError",
-                    "instruction_type": instruction_data.type.value if hasattr(instruction_data, 'type') else 'unknown',
-                    "message": str(e)
-                })
-                return self._prepare_result(success=False)
+        if self.memory_manager and not self._errors:
+            final_context_to_store = {
+                "last_known_url": self._page.url if self._page else current_session_context.get("last_known_url"),
+                "actions_completed_in_run": self._actions_completed,
+                "total_instructions_in_set": len(instruction_set.instructions) + (1 if instruction_set.url else 0),
+                "final_status": "success",
+                "extracted_data_summary": list(self._extracted_data.keys()),
+                "history_summary": f"{len(current_session_context.get('history', []))} steps in this run.",
+                "timestamp": time.time()
+            }
+            logger.info(f"MEMORY: Storing final session context for user {self.identity_id}")
+            await self.memory_manager.store_session_context(
+                user_id=self.identity_id,
+                context_data=final_context_to_store 
+            )
         
-        return self._prepare_result(success=True)
+        return self._prepare_result(success=True and not self._errors)
 
     def _prepare_result(self, success: bool) -> Dict:
         execution_time = time.time() - self._execution_start_time
@@ -654,6 +928,59 @@ class WebBrowserAgent:
                 extracted_results[selector] = {"error": str(e)}
         return extracted_results
 
+    async def get_automation_insights(self, user_id: str = None) -> Dict[str, Any]:
+        """Get insights and suggestions based on accumulated memory"""
+        if not self.memory_manager:
+            return {"insights": [], "suggestions": []}
+        
+        target_user = user_id or self.identity_id
+        
+        try:
+            # Get recent automation patterns
+            recent_patterns = self.memory_manager.search_memory(
+                query="automation pattern",
+                user_id=target_user,
+                limit=20
+            )
+            
+            insights = []
+            suggestions = []
+            
+            # Analyze success/failure rates
+            successes = [p for p in recent_patterns if p.get('metadata', {}).get('success', False)]
+            failures = [p for p in recent_patterns if not p.get('metadata', {}).get('success', True)]
+            
+            if len(recent_patterns) > 5:
+                success_rate = len(successes) / len(recent_patterns) * 100
+                insights.append(f"Current automation success rate: {success_rate:.1f}%")
+                
+                if success_rate < 80:
+                    suggestions.append("Consider reviewing failed patterns and adjusting selectors or timing")
+            
+            # Analyze timing patterns
+            execution_times = [
+                p.get('metadata', {}).get('execution_time', 0) 
+                for p in successes 
+                if p.get('metadata', {}).get('execution_time')
+            ]
+            
+            if execution_times:
+                avg_time = sum(execution_times) / len(execution_times)
+                insights.append(f"Average execution time: {avg_time:.2f}s")
+                
+                if avg_time > 5.0:
+                    suggestions.append("Automation is running slowly - consider optimizing selectors or reducing delays")
+            
+            return {
+                "insights": insights,
+                "suggestions": suggestions,
+                "total_patterns": len(recent_patterns),
+                "success_rate": len(successes) / max(len(recent_patterns), 1) * 100
+            }
+        except Exception as e:
+            logger.error(f"Error getting automation insights: {e}")
+            return {"insights": [], "suggestions": [], "error": str(e)}
+
     async def solve_captcha(self, captcha_type: str) -> bool:
         """Handle various CAPTCHA types (Placeholder)."""
         # This is a placeholder for CAPTCHA solving integration.
@@ -704,6 +1031,26 @@ async def main():
         print(f"CAPTCHA Handler Stats: {captcha_handler.get_stats()}")
 
     print("WebBrowserAgent exited context. Test finished.")
+
+
+def create_browser_agent(memory_enabled: bool = True, **kwargs) -> Union[WebBrowserAgent, MemoryEnhancedWebBrowserAgent]:
+    """Factory method to create appropriate browser agent"""
+    # Ensure settings is accessible, it should be imported at the top of the file
+    # from ..config import settings
+    if memory_enabled and settings.awm_config.ENABLED:
+        awm_config_dict = {
+            "backend": settings.awm_config.BACKEND,
+            "database_url": settings.awm_config.DATABASE_URL,
+            # The AWM class in awm_integration.py expects a generic awm_config dict.
+            # The MemoryEnhancedWebBrowserAgent then passes this to AWMBrowserMemory.
+            # The AWMBrowserMemory constructor uses AWM(**awm_config), so it needs keys like 'backend', 'database_url'.
+            # The 'retention_days' key was in the original plan but AWMBrowserMemory doesn't directly use it; AWM itself might.
+            # For now, sticking to what AWM constructor in the plan implies.
+            # If AWM class itself needs more specific keys from AWMConfig, this dict should be expanded.
+        }
+        return MemoryEnhancedWebBrowserAgent(awm_config=awm_config_dict, **kwargs)
+    else:
+        return WebBrowserAgent(**kwargs)
 
 if __name__ == "__main__":
     # Setup logging
