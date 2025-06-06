@@ -5,6 +5,8 @@ This preserves the original clean code structure
 from mem0 import Memory
 import logging
 import os
+from datetime import datetime
+import pytz
 from web_automation.config.config_models import Mem0AdapterConfig
 import time
 import shutil
@@ -93,6 +95,11 @@ class Mem0BrowserAdapter:
                 "config": llm_config_data
             }
             logger.info(f"Mem0BrowserAdapter: Final LLM config: {final_mem0_init_config['llm']}")
+
+            # Agent ID Configuration
+            if self.mem0_config.agent_id:
+                final_mem0_init_config["agent_id"] = self.mem0_config.agent_id
+                logger.info(f"Mem0BrowserAdapter: Setting agent_id for Mem0: {self.mem0_config.agent_id}")
 
             # Version Configuration
             final_mem0_init_config["version"] = self.mem0_config.mem0_version
@@ -240,71 +247,90 @@ class Mem0BrowserAdapter:
             logger.error(f"Error storing session context for {user_id}: {e}")
 
     # AUTOMATION MEMORY: Successful patterns, failed attempts, optimizations
-    def store_automation_pattern(self, description: str, selector: str, success: bool, user_id: str, metadata: dict = None):
+    def store_automation_pattern(self, user_id: str, description: str, selector: str, success: bool, fallback_selector: Optional[str] = None, metadata: Optional[dict] = None):
         if not self.memory:
             logger.warning("Memory not initialized. Cannot store automation pattern.")
             return
-            
-        # result_text = "successful" if success else "failed" # No longer needed for main text
-        full_metadata = {"type": "automation", "success": success, "selector": selector}
-        if metadata:
-            full_metadata.update(metadata) # Allow overriding/adding to selector if needed
-            
-        try:
-            # Store the human-readable description as the main searchable text.
-            # The actual selector is in metadata.
-            add_result = self.memory.add(
-                description, 
-                user_id=user_id, 
-                metadata=full_metadata
-            )
-            print(f"MEM0_ADD_RESULT for automation_pattern: {add_result}") # DEBUG PRINT
-            logger.debug(f"Stored automation pattern for {user_id} (Success: {success}): Description='{description}', Selector='{selector}'")
-        except Exception as e:
-            logger.error(f"Error storing automation pattern for {user_id}: {e}")
 
-    # Generic search method (can be specialized later as needed)
+        # Use a more direct, fact-like string for the LLM
+        pattern_text = f"Automation Fact: For target '{description}', the selector used was '{selector}'."
+
+        metadata_to_store = {
+            "type": "automation_pattern", # Consistent metadata type for these patterns
+            "target_description": description,
+            "selector_used": selector,
+            "success": success,
+            "timestamp": datetime.now(pytz.utc).isoformat(),
+            "source": "smart_selector",
+            "original_fallback_selector": fallback_selector
+        }
+        if metadata: # Merge any additional provided metadata
+            metadata_to_store.update(metadata)
+
+        try:
+            add_result = self.memory.add(
+                pattern_text,
+                user_id=user_id,
+                agent_id=self.mem0_config.agent_id, # Pass agent_id here
+                metadata=metadata_to_store,
+                infer=False  # Add this line to store raw text
+            )
+            # The print statement from the test output shows 'MEM0_ADD_RESULT for automation_pattern: {'results': []}'
+            # This means add_result might be a dict with a 'results' key, or sometimes just None/empty if storage is skipped.
+            if add_result and isinstance(add_result, dict) and add_result.get("results"):
+                logger.info(f"Successfully stored automation pattern for {user_id}. Mem0 Response: {add_result}")
+            elif add_result:
+                logger.info(f"Automation pattern storage attempted for {user_id}. Mem0 Response: {add_result}")
+            else:
+                # This case likely means Mem0 decided not to store it (e.g. 'No new facts')
+                logger.warning(f"Automation pattern storage for {user_id} resulted in no explicit confirmation from Mem0 (possibly skipped). Pattern: '{pattern_text}'")
+            # For debugging, let's keep the print that matches the test output temporarily
+            print(f"MEM0_ADD_RESULT for automation_pattern: {add_result}")
+
+        except Exception as e:
+            logger.error(f"Error storing automation pattern for {user_id}: {e}. Pattern: '{pattern_text}'")
+
+    # Generic search method
     def search_memory(self, query: str, user_id: str, limit: int = 5, metadata_filter: dict = None):
         if not self.memory:
             logger.warning("Memory not initialized. Cannot search memory.")
             return []
-        
+# ... (rest of the code remains the same)
         try:
-            raw_output = self.memory.search(query=query, user_id=user_id, limit=limit)
-            logger.debug(f"Raw output from mem0.search for {user_id} with query '{query}': {raw_output}")
-            results_list = []
+            # Assuming mem0.search() might return results directly or under a 'results' key
+            # based on recent API observations.
+            raw_output = self.memory.search(
+                query=query,
+                user_id=user_id,
+                limit=limit,
+                filters=metadata_filter  # Mem0 search uses 'filters' for metadata
+            )
+            logger.debug(f"Raw output from mem0.search for {user_id} with query '{query}', filter {metadata_filter}: {raw_output}")
 
+            results_list = []
+            # Process based on observed mem0.add() returning {'results': [...]}
+            # and mem0.search() often returning a list of dicts directly.
             if isinstance(raw_output, dict) and 'results' in raw_output and isinstance(raw_output['results'], list):
                 results_list = raw_output['results']
-            elif isinstance(raw_output, list):
+            elif isinstance(raw_output, list): # More common for search
                 results_list = raw_output
             else:
                 logger.warning(f"Unexpected output format from mem0.search for {user_id} with query '{query}': {type(raw_output)} - {raw_output}")
                 return []
 
-            if metadata_filter:
-                filtered_results = []
-                for res_idx, res_item in enumerate(results_list):
-                    try:
-                        if isinstance(res_item, dict) and res_item.get('metadata') and all(item in res_item['metadata'].items() for item in metadata_filter.items()):
-                            filtered_results.append(res_item)
-                        elif not isinstance(res_item, dict):
-                            logger.warning(f"Search result item at index {res_idx} is not a dict: {res_item}")
-                    except Exception as item_exc:
-                        logger.error(f"Error processing search result item at index {res_idx}: {res_item}. Exception: {item_exc}")
-                logger.debug(f"Searched memory for {user_id} with query '{query}', filter {metadata_filter}. Found {len(filtered_results)} after filtering from {len(results_list)} raw results.")
-                return filtered_results
-            else:
-                processed_results_list = []
-                for res_idx, res_item in enumerate(results_list):
-                    if isinstance(res_item, dict):
-                        processed_results_list.append(res_item)
-                    else:
-                        logger.warning(f"Search result item at index {res_idx} (no filter) is not a dict: {res_item}. Skipping.")
-                logger.debug(f"Searched memory for {user_id} with query '{query}'. Found {len(processed_results_list)} items.")
-                return processed_results_list
+            # Ensure all items in results_list are dicts, as expected by downstream processing in tests
+            processed_results = []
+            for item in results_list:
+                if isinstance(item, dict):
+                    processed_results.append(item)
+                else:
+                    logger.warning(f"Search result item is not a dict: {item}. Skipping.")
+            
+            logger.debug(f"Searched memory for {user_id} with query '{query}', filter {metadata_filter}. Found {len(processed_results)} items.")
+            return processed_results
+
         except Exception as e:
-            logger.error(f"Error searching memory for {user_id} with query '{query}': {e}")
+            logger.error(f"Error searching memory for {user_id} with query '{query}', filter {metadata_filter}: {e}")
             return []
 
     def search_automation_patterns(self, pattern_query: str, user_id: str, limit: int = 5):
@@ -312,9 +338,9 @@ class Mem0BrowserAdapter:
             query=pattern_query, 
             user_id=user_id, 
             limit=limit,
-            metadata_filter={"type": "automation"}
+            metadata_filter={"type": "automation_pattern"}
         )
-        print(f"MEM0_SEARCH_RESULTS for automation_patterns (query='{pattern_query}', filter={{'type': 'automation'}}): {results}") # DEBUG PRINT
+        print(f"MEM0_SEARCH_RESULTS for automation_patterns (query='{pattern_query}', filter={{'type': 'automation_pattern'}}): {results}") # DEBUG PRINT
         return results
 
     async def search_session_context(self, user_id: str, query: str, limit: int = 5):

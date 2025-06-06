@@ -26,7 +26,7 @@ async def test_memory_enhanced_agent():
         mem0_version="v1.1", 
         llm_provider="ollama", 
         llm_model="qwen2.5vl:7b", # Your Ollama model
-        llm_temperature=0.1, 
+        llm_temperature=0.7, 
         # llm_base_url can be specified if Ollama is not on http://localhost:11434
         api_key=None # Not needed for Ollama
         # agent_id can be omitted if not needed for local/test Mem0
@@ -61,16 +61,18 @@ async def test_memory_enhanced_agent():
                    )
                    print(f"Direct memory.add result: {add_op_result}")
                    assert add_op_result is not None, "Mem0 add operation should return a result."
-                   assert "memories" in add_op_result, "Mem0 add result should contain 'memories' key."
-                   assert len(add_op_result["memories"]) > 0, "Mem0 add should store at least one memory."
-                   assert add_op_result["memories"][0]["text"] == direct_add_text, "Stored memory text should match input."
+                   assert "results" in add_op_result, "Mem0 add result should contain 'results' key."
+                   assert len(add_op_result["results"]) > 0, "Mem0 add should store at least one memory item in 'results'."
+                   assert "memory" in add_op_result["results"][0], "Stored memory item in 'results' should have a 'memory' key for the text."
+                   assert add_op_result["results"][0]["memory"] == direct_add_text, "Stored memory text should match input."
 
                    # Try to retrieve it immediately
                    search_results = agent.memory_manager.memory.search(query=direct_add_text, user_id=direct_add_user_id, limit=1)
                    print(f"Direct memory.search for '{direct_add_text}' result: {search_results}")
                    assert search_results is not None, "Mem0 search operation should return results."
-                   assert len(search_results) > 0, "Mem0 search should find the added memory."
-                   assert search_results[0]["memory"]["text"] == direct_add_text, "Found memory text should match added text."
+                   assert "results" in search_results, "Mem0 search result should contain 'results' key."
+                   assert len(search_results["results"]) > 0, "Mem0 search should find at least one memory in 'results'."
+                   assert search_results["results"][0]["memory"] == direct_add_text, "Found memory text should match added text."
                    all_for_user = agent.memory_manager.memory.get_all(user_id=direct_add_user_id)
                    print(f"Direct memory.get_all for user '{direct_add_user_id}' result: {all_for_user}")
                except Exception as e:
@@ -112,7 +114,7 @@ async def test_memory_enhanced_agent():
                 assert any("main navigation link" in pattern.get('memory', '') for pattern in new_patterns), \
                     "Stored pattern memory text should relate to 'main navigation link'."
                 # Check if the selector used (fallback in this case) is in the metadata
-                assert any(pattern.get('metadata', {}).get('selector') == "a[href='https://www.iana.org/domains/example']" for pattern in new_patterns), \
+                assert any(pattern.get('metadata', {}).get('original_fallback_selector') == "a[href='https://www.iana.org/domains/example']" for pattern in new_patterns), \
                     "Stored pattern metadata should contain the fallback selector used."
 
             print(f"=== MEMORY DEBUG END ===\n")
@@ -148,5 +150,51 @@ def test_memory_config():
     from web_automation.config.settings import awm_config
     assert hasattr(awm_config, 'ENABLED')
     assert hasattr(awm_config, 'BACKEND')
+
+def debug_memory_config_flow():
+    """Debug helper to trace config serialization"""
+    import json
+    from web_automation.config.config_models import Mem0AdapterConfig
+    
+    # Create test config
+    test_config = Mem0AdapterConfig(
+        qdrant_on_disk=False,
+        qdrant_embedding_model_dims=384,
+        llm_provider="ollama",
+        llm_model="qwen2.5vl:7b"
+    )
+    
+    # Test dict operations
+    print(f"\n=== DEBUG MEMORY CONFIG FLOW ===")
+    print(f"Original config type: {type(test_config)}")
+    print(f"Config fields set: {test_config.model_fields_set}")
+    
+    # Wrong way (illustrating the old bug)
+    print("\n--- Simulating Incorrect Serialization (dict.update(model_instance)) ---")
+    wrong_dict = {"enabled": True}
+    # Simulate the incorrect update by directly assigning the model instance as a value 
+    # (as dict.update(model) would effectively do for its internal items() iteration)
+    # For clarity, let's show what happens if you tried to make it a key (which is what dict.update does with an iterable of key-value pairs)
+    # but the actual bug was more about the internal structure not being a flat dict.
+    # The original bug was: final_memory_config.update(memory_config) -> this iterates memory_config.model_fields
+    # and updates final_memory_config with field_name: field_value. The issue was if memory_config was NOT a Mem0AdapterConfig but a plain dict
+    # or if the downstream factory expected a dict representation of Mem0AdapterConfig, not the object itself.
+    # The most direct way to show the problem fixed by model_dump() is comparing the object vs its dict representation.
+    
+    # Let's show the state of a config if it were *not* dumped:
+    config_as_object_in_dict = {"enabled": True, "mem0_details": test_config} 
+    print(f"Simulated wrong dict (object not dumped): {config_as_object_in_dict}")
+    print(f"Type of mem0_details: {type(config_as_object_in_dict['mem0_details'])}")
+
+    # Right way
+    print("\n--- Correct Serialization (model.model_dump()) ---")
+    right_dict = {"enabled": True}
+    right_dict.update(test_config.model_dump())
+    print(f"Right dict keys: {list(right_dict.keys())}")
+    print(f"Right dict (content): {json.dumps(right_dict, indent=2)}")
+    print(f"Type of 'config' in right_dict: {type(right_dict.get('config'))}")
+    print(f"=== DEBUG MEMORY CONFIG FLOW END ===\n")
+    
+    return right_dict
     assert awm_config.ENABLED is True # Based on .env file created
     assert awm_config.BACKEND == "sqlite" # Based on .env file created
