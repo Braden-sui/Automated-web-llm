@@ -74,6 +74,15 @@ class InstructionExecutionError(BrowserAgentError):
         self.message = message
         super().__init__(f"Failed to execute instruction {instruction.get('type')}: {message}")
 
+class AgentState(Enum):
+    IDLE = "idle"
+    EXECUTING = "executing"
+    AWAITING_NAVIGATION = "awaiting_navigation"
+    CAPTCHA_REQUIRED = "captcha_required"
+    UNEXPECTED_MODAL = "unexpected_modal"
+    FATAL_ERROR = "fatal_error"
+    RECOVERING = "recovering"
+
 class PlaywrightBrowserAgent:
     """
     A browser automation agent that executes JSON-based instructions using Playwright.
@@ -130,6 +139,38 @@ class PlaywrightBrowserAgent:
         
         self._reset_execution_state()
         self._fingerprint_profile = self._load_or_create_profile()
+
+        # Initialize executors
+        from web_automation.executors.click_executor import ClickExecutor
+        from web_automation.executors.type_executor import TypeExecutor
+        from web_automation.executors.navigate_executor import NavigateExecutor
+        from web_automation.executors.wait_executor import WaitExecutor
+        from web_automation.executors.scroll_executor import ScrollExecutor
+        from web_automation.executors.screenshot_executor import ScreenshotExecutor
+        from web_automation.executors.extract_executor import ExtractExecutor
+        from web_automation.executors.evaluate_executor import EvaluateExecutor
+        from web_automation.executors.upload_executor import UploadExecutor
+        from web_automation.executors.download_executor import DownloadExecutor
+
+        self.executors = {
+            ActionType.CLICK: ClickExecutor(),
+            ActionType.TYPE: TypeExecutor(),
+            ActionType.NAVIGATE: NavigateExecutor(),
+            ActionType.WAIT: WaitExecutor(),
+            ActionType.SCROLL: ScrollExecutor(),
+            ActionType.SCREENSHOT: ScreenshotExecutor(),
+            ActionType.EXTRACT: ExtractExecutor(),
+            ActionType.EVALUATE: EvaluateExecutor(),
+            ActionType.UPLOAD: UploadExecutor(),
+            ActionType.DOWNLOAD: DownloadExecutor(),
+        }
+        logger.info(f"Agent {self.identity_id} initialized with executors")
+
+        # State machine initialization
+        self.current_state = AgentState.IDLE
+        self.previous_state = AgentState.IDLE
+        self._captcha_attempts = 0
+        self._max_captcha_attempts = 3
 
     # --- Explicit Image Analysis API ---
     async def analyze_image(self, image_data: Union[bytes, str], prompt: str = "Describe what you see in this image") -> str:
@@ -580,10 +621,10 @@ class PlaywrightBrowserAgent:
         enhanced_instruction = await self._apply_memory_context(instruction_data, memories)
         
         action_type = getattr(enhanced_instruction, 'type', getattr(instruction_data, 'type'))
-        handler = self._get_action_handler(action_type)
+        executor = self.executors.get(action_type)
 
-        if not handler:
-            error_msg = f"No handler found for action type '{action_type.value if hasattr(action_type, 'value') else action_type}'"
+        if not executor:
+            error_msg = f"No executor found for action type '{action_type.value if hasattr(action_type, 'value') else action_type}'"
             logger.error(error_msg)
             # Create a simple exception for _handle_execution_failure
             temp_exception = Exception(error_msg)
@@ -623,7 +664,7 @@ class PlaywrightBrowserAgent:
             try:
                 logger.info(f"Attempt {attempt + 1}/{total_attempts} for instruction: {action_type.value if hasattr(action_type, 'value') else str(action_type)} - Selector: {getattr(enhanced_instruction, 'selector', 'N/A')}")
                 
-                await handler(enhanced_instruction) # Core action execution
+                await executor.execute(self._page, enhanced_instruction) # Core action execution
                 
                 self._actions_completed += 1
                 
@@ -671,332 +712,269 @@ class PlaywrightBrowserAgent:
                 })
             raise last_exception
 
-    async def execute_instructions(self, instructions_json: Union[Dict, InstructionSet]) -> Dict:
-        self._reset_execution_state()
-        self._execution_start_time = time.time()
-        current_session_context = {"initial_url": None, "history": []}
+    async def _check_page_state(self) -> AgentState:
+        """
+        Check the current state of the page to detect unexpected conditions like CAPTCHA or modals.
 
-        if isinstance(instructions_json, dict):
-            try:
-                instruction_set = InstructionSet(**instructions_json)
-            except ValidationError as e:
-                self._errors.append({"type": "ValidationError", "message": str(e)})
-                return self._prepare_result(success=False)
-        elif isinstance(instructions_json, InstructionSet):
-            instruction_set = instructions_json
-        else:
-            self._errors.append({"type": "InvalidInput", "message": "instructions_json must be a dict or InstructionSet"})
-            return self._prepare_result(success=False)
-
+        Returns:
+            AgentState: The detected state of the agent.
+        """
         if not self._page:
-            self._errors.append({"type": "BrowserError", "message": "Page not initialized."})
-            return self._prepare_result(success=False)
+            logger.error("Cannot check page state: Page not initialized")
+            return AgentState.FATAL_ERROR
 
-        if self.memory_manager:
-            logger.info(f"MEMORY: Retrieving session context for user {self.identity_id}")
-            retrieved_contexts = await self.memory_manager.search_session_context(
-                user_id=self.identity_id,
-                query="last known state or initial context", # General query
-                limit=1 
-            )
-            if retrieved_contexts and retrieved_contexts[0].get("data"):
-                # Ensure data is a dict
-                retrieved_data = retrieved_contexts[0]["data"]
-                if isinstance(retrieved_data, str):
-                    try:
-                        current_session_context.update(json.loads(retrieved_data))
-                    except json.JSONDecodeError:
-                         logger.warning(f"MEMORY: Failed to parse retrieved session context string: {retrieved_data}")
-                         current_session_context.update({"raw_retrieved_context": retrieved_data}) # store as is
-                elif isinstance(retrieved_data, dict):
-                     current_session_context.update(retrieved_data)
-                else:
-                    logger.warning(f"MEMORY: Retrieved session context data is not a dict or parsable string: {type(retrieved_data)}")
-                    current_session_context.update({"raw_retrieved_context": str(retrieved_data)})
-
-                logger.info(f"MEMORY: Retrieved and updated session context: {current_session_context}")
-        
-        current_session_context["initial_url"] = instruction_set.url or (self._page.url if self._page else None)
-
-        if instruction_set.url:
-            nav_instruction = NavigateInstruction(type=ActionType.NAVIGATE, url=instruction_set.url)
-            logger.info(f"Executing initial navigation to: {instruction_set.url}")
-            success = await self._execute_instruction_with_memory(nav_instruction, current_session_context)
-            if not success:
-                return self._prepare_result(success=False)
-            current_session_context["history"].append({
-                "action": ActionType.NAVIGATE.value, 
-                "url": instruction_set.url, 
-                "status": "success",
-                "timestamp": time.time()
-            })
-            current_session_context["last_known_url"] = self._page.url if self._page else instruction_set.url
-
-        for instruction_data in instruction_set.instructions:
-            logger.info(f"Executing instruction: {instruction_data.type.value} - Selector: {getattr(instruction_data, 'selector', 'N/A')}")
-            success = await self._execute_instruction_with_memory(instruction_data, current_session_context)
-            
-            action_details_for_history = instruction_data.dict()
-            if 'type' in action_details_for_history and isinstance(action_details_for_history['type'], Enum):
-                 action_details_for_history['type'] = action_details_for_history['type'].value
-
-            current_session_context["history"].append({
-                "instruction": action_details_for_history,
-                "status": "success" if success else "failure",
-                "timestamp": time.time(),
-                "current_url": self._page.url if self._page else current_session_context.get("last_known_url")
-            })
-            
-            if not success:
-                return self._prepare_result(success=False) # Stop on first error
-            
-            current_session_context["last_known_url"] = self._page.url if self._page else current_session_context.get("last_known_url")
-            current_session_context["last_successful_action"] = action_details_for_history
-
-        if self.memory_manager and not self._errors:
-            final_context_to_store = {
-                "last_known_url": self._page.url if self._page else current_session_context.get("last_known_url"),
-                "actions_completed_in_run": self._actions_completed,
-                "total_instructions_in_set": len(instruction_set.instructions) + (1 if instruction_set.url else 0),
-                "final_status": "success",
-                "extracted_data_summary": list(self._extracted_data.keys()),
-                "history_summary": f"{len(current_session_context.get('history', []))} steps in this run.",
-                "timestamp": time.time()
-            }
-            logger.info(f"MEMORY: Storing final session context for user {self.identity_id}")
-            await self.memory_manager.store_session_context(
-                user_id=self.identity_id,
-                context_data=final_context_to_store 
-            )
-        
-        return self._prepare_result(success=True and not self._errors)
-
-    def _prepare_result(self, success: bool) -> Dict:
-        execution_time = time.time() - self._execution_start_time
-        return {
-            "success": success and not self._errors,
-            "execution_time": round(execution_time, 2),
-            "actions_completed": self._actions_completed,
-            "screenshots": self._screenshots,
-            "extracted_data": self._extracted_data,
-            "errors": self._errors,
-            "captchas_solved": self._captchas_solved,
-            "final_url": self._page.url if self._page else None
-        }
-
-    def _get_action_handler(self, action_type: ActionType) -> Optional[Callable]:
-        """Returns the appropriate handler function for a given action type."""
-        handler_map = {
-            ActionType.CLICK: self._handle_click,
-            ActionType.TYPE: self._handle_type,
-            ActionType.WAIT: self._handle_wait,
-            ActionType.SCROLL: self._handle_scroll,
-            ActionType.SCREENSHOT: self._handle_screenshot,
-            ActionType.EXTRACT: self._handle_extract,
-            ActionType.NAVIGATE: self._handle_navigate,
-            ActionType.EVALUATE: self._handle_evaluate,
-            ActionType.UPLOAD: self._handle_upload,
-            ActionType.DOWNLOAD: self._handle_download,
-        }
-        return handler_map.get(action_type)
-
-    async def _get_element(self, selector: str, timeout: Optional[int] = None) -> ElementHandle:
-        if not self._page: raise BrowserAgentError("Page not available")
         try:
-            element = await self._page.wait_for_selector(
-                selector, 
-                state="visible", 
-                timeout=timeout or self.default_timeout
-            )
-            if not element:
-                raise InstructionExecutionError({"selector": selector}, f"Element not found or not visible: {selector}")
-            return element
-        except PlaywrightTimeoutError:
-            raise InstructionExecutionError({"selector": selector}, f"Timeout waiting for element: {selector}")
+            # Check for CAPTCHA
+            captcha_indicators = [
+                "#g-recaptcha", 
+                ".g-recaptcha", 
+                "#recaptcha", 
+                "[data-sitekey]", 
+                "iframe[src*='recaptcha']",
+                "div:contains('CAPTCHA')",
+                "div:contains('captcha')"
+            ]
+            for indicator in captcha_indicators:
+                element = await self._page.query_selector(indicator)
+                if element and await element.is_visible():
+                    logger.warning(f"CAPTCHA detected with selector: {indicator}")
+                    return AgentState.CAPTCHA_REQUIRED
 
-    async def _get_page_or_fail(self) -> "Page":
-        """Helper method to get page with proper error handling."""
-        if not self._page:
-            raise BrowserAgentError("Page not initialized")
-        return self._page
+            # Check for unexpected modals or pop-ups (adjust selectors based on common patterns)
+            modal_indicators = [
+                "div.modal", 
+                "div.popup", 
+                "#overlay", 
+                "div:contains('login')", 
+                "div:contains('sign in')",
+                "div:contains('session expired')"
+            ]
+            for indicator in modal_indicators:
+                element = await self._page.query_selector(indicator)
+                if element and await element.is_visible():
+                    logger.warning(f"Unexpected modal detected with selector: {indicator}")
+                    return AgentState.UNEXPECTED_MODAL
 
-    async def _handle_click(self, instruction: ClickInstruction):
-        element = await self._get_element(instruction.selector, instruction.timeout)
-        await asyncio.sleep(random.uniform(0.1, 0.3)) # Human-like delay
-        await element.click(
-            button=instruction.button, 
-            click_count=instruction.click_count, 
-            delay=instruction.delay
-        )
-        if instruction.wait_for == WaitCondition.NAVIGATION:
-            await self._page.wait_for_load_state("load", timeout=instruction.timeout or self.default_timeout)
-        elif instruction.wait_for == WaitCondition.NETWORK_IDLE:
-            await self._page.wait_for_load_state("networkidle", timeout=instruction.timeout or self.default_timeout)
+            # Check URL for unexpected navigation (like a login page or error page)
+            current_url = self._page.url
+            if 'login' in current_url.lower() or 'signin' in current_url.lower():
+                logger.warning(f"Unexpected navigation to login page: {current_url}")
+                return AgentState.UNEXPECTED_MODAL
 
-    async def _handle_type(self, instruction: TypeInstruction):
-        element = await self._get_element(instruction.selector, instruction.timeout)
-        if instruction.clear:
-            await element.fill("")
-            await self._human_like_delay(min_ms=50, max_ms=100, base_delay_type="after") # Small delay after clearing
-
-        await element.click() # Focus element before typing
-        await self._human_like_delay(min_ms=50, max_ms=150, base_delay_type="before") # Delay after click, before typing first char
-        
-        for char_to_type in instruction.text:
-            await self._get_page_or_fail().keyboard.type(char_to_type)
-            # Use explicit delay from instruction if provided, otherwise use configured random typing delay
-            char_delay_ms = instruction.delay_between_chars
-            if char_delay_ms is not None and char_delay_ms > 0:
-                 await asyncio.sleep(char_delay_ms / 1000.0)
-            elif char_delay_ms is None: # Only use anti_detection_config if instruction doesn't specify a delay
-                await self._human_like_delay(base_delay_type="typing")
-            # No delay if instruction.delay_between_chars is 0
-
-    async def _handle_wait(self, instruction: WaitInstruction):
-        if not self._page: raise BrowserAgentError("Page not available")
-        timeout = instruction.timeout or self.default_timeout
-        if instruction.condition == WaitCondition.NAVIGATION:
-            await self._page.wait_for_load_state("load", timeout=timeout)
-        elif instruction.condition == WaitCondition.NETWORK_IDLE:
-            await self._page.wait_for_load_state("networkidle", timeout=timeout)
-        elif instruction.condition == WaitCondition.ELEMENT_VISIBLE and instruction.selector:
-            await self._get_element(instruction.selector, timeout)
-        elif instruction.condition == WaitCondition.ELEMENT_HIDDEN and instruction.selector:
-            await self._page.wait_for_selector(instruction.selector, state="hidden", timeout=timeout)
-        elif instruction.condition == WaitCondition.TIMEOUT and isinstance(instruction.wait_for, int):
-            await asyncio.sleep(instruction.wait_for / 1000)
-        else:
-            logger.warning(f"Unsupported or misconfigured wait instruction: {instruction.condition}")
-
-    async def _handle_scroll(self, instruction: ScrollInstruction):
-        if not self._page: raise BrowserAgentError("Page not available")
-        if instruction.scroll_into_view and instruction.selector:
-            element = await self._get_element(instruction.selector, instruction.timeout)
-            await element.scroll_into_view_if_needed(timeout=instruction.timeout or self.default_timeout)
-        elif instruction.x is not None or instruction.y is not None:
-            script = f"window.scrollBy({{ left: {instruction.x or 0}, top: {instruction.y or 0}, behavior: '{instruction.behavior}' }})"
-            await self._page.evaluate(script)
-        await asyncio.sleep(random.uniform(0.2, 0.5)) # Wait for scroll to take effect
-
-    async def _handle_screenshot(self, instruction: ScreenshotInstruction):
-        if not self._page:
-            raise BrowserAgentError("Page is not initialized. Cannot take screenshot.")
-        
-        logger.debug(f"_handle_screenshot received instruction.filename: {instruction.filename}")
-        filename = instruction.filename
-        if not filename: # Generate a default filename if not provided
-            filename = f"screenshot_{time.time()}.png"
-            logger.debug(f"instruction.filename was empty, generated default filename: {filename}")
-        
-        # Ensure the screenshots directory exists
-        screenshots_dir = Path(general_config.SCREENSHOTS_DIR)
-        screenshots_dir.mkdir(parents=True, exist_ok=True)
-        
-        full_path = screenshots_dir / filename
-        logger.debug(f"_handle_screenshot full_path for screenshot: {full_path}")
-        
-        try:
-            await self._human_like_delay(base_delay_type="before")
-            await self._page.screenshot(path=full_path, full_page=instruction.full_page)
-            logger.info(f"Screenshot taken: {full_path}")
-            self._screenshots.append(str(full_path))
-            await self._human_like_delay(base_delay_type="after")
-            return {"status": "success", "path": str(full_path)}
-        except PlaywrightTimeoutError:
-            logger.error(f"Timeout while taking screenshot: {filename}")
-            self._errors.append({"type": "ScreenshotError", "message": f"Timeout taking screenshot {filename}"})
-            return {"status": "error", "message": "Timeout while taking screenshot"}
+            # If no issues detected, return to normal state
+            return AgentState.EXECUTING if self.current_state != AgentState.IDLE else AgentState.IDLE
         except Exception as e:
-            logger.error(f"Error taking screenshot {filename}: {e}")
-            self._errors.append({"type": "ScreenshotError", "message": f"Error taking screenshot {filename}: {e}"})
-            return {"status": "error", "message": str(e)}
+            logger.error(f"Error checking page state: {e}", exc_info=True)
+            return AgentState.FATAL_ERROR
 
-    async def _handle_extract(self, instruction: ExtractInstruction) -> Union[str, List[str], None]:
-        if not self._page: raise BrowserAgentError("Page not available")
-        if not instruction.selector: 
-            raise InstructionExecutionError(instruction.dict(), "Selector is required for extract instruction.")
+    async def _handle_state_transition(self, new_state: AgentState) -> bool:
+        """
+        Handle transition to a new state and execute appropriate recovery actions.
 
-        elements = await self._page.query_selector_all(instruction.selector)
-        if not elements:
-            if instruction.multiple:
-                return []
+        Args:
+            new_state: The new state to transition to.
+
+        Returns:
+            bool: True if the state was handled successfully, False otherwise.
+        """
+        self.previous_state = self.current_state
+        self.current_state = new_state
+        logger.info(f"State transition: {self.previous_state.value} -> {self.current_state.value}")
+
+        if new_state == AgentState.CAPTCHA_REQUIRED:
+            return await self._handle_captcha_state()
+        elif new_state == AgentState.UNEXPECTED_MODAL:
+            return await self._handle_modal_state()
+        elif new_state == AgentState.FATAL_ERROR:
+            logger.error("Fatal error state reached. Stopping execution.")
+            return False
+        elif new_state in [AgentState.IDLE, AgentState.EXECUTING, AgentState.AWAITING_NAVIGATION]:
+            return True  # Normal states, no special handling needed
+        elif new_state == AgentState.RECOVERING:
+            logger.info("Agent is in recovering state")
+            return True
+        else:
+            logger.warning(f"Unhandled state: {new_state.value}")
+            return False
+
+    async def _handle_captcha_state(self) -> bool:
+        """
+        Handle the CAPTCHA_REQUIRED state by attempting to solve the CAPTCHA.
+
+        Returns:
+            bool: True if CAPTCHA was solved or max attempts reached, False if a fatal error occurs.
+        """
+        if self._captcha_attempts >= self._max_captcha_attempts:
+            logger.error(f"Max CAPTCHA attempts ({self._max_captcha_attempts}) reached. Cannot solve.")
+            self._captcha_attempts = 0  # Reset for next time
+            self.current_state = AgentState.FATAL_ERROR
+            return False
+
+        self._captcha_attempts += 1
+        logger.info(f"Attempting to solve CAPTCHA (Attempt {self._captcha_attempts}/{self._max_captcha_attempts})")
+        
+        if 'captcha' in self.plugins:
+            try:
+                success = await self.plugins['captcha'].solve()
+                if success:
+                    logger.info("CAPTCHA solved successfully")
+                    self._captcha_attempts = 0  # Reset on success
+                    self.current_state = AgentState.RECOVERING
+                    # Wait briefly to ensure page updates after CAPTCHA solve
+                    await asyncio.sleep(2)
+                    return True
+                else:
+                    logger.warning("Failed to solve CAPTCHA")
+                    return False
+            except Exception as e:
+                logger.error(f"Error solving CAPTCHA: {e}", exc_info=True)
+                return False
+        else:
+            logger.error("CAPTCHA plugin not available. Cannot solve CAPTCHA.")
+            self.current_state = AgentState.FATAL_ERROR
+            return False
+
+    async def _handle_modal_state(self) -> bool:
+        """
+        Handle the UNEXPECTED_MODAL state by attempting to dismiss or handle the modal.
+
+        Returns:
+            bool: True if modal was handled, False otherwise.
+        """
+        logger.info("Handling unexpected modal or login page")
+        # Simple strategy: Try to find and click a close button
+        close_button_selectors = [
+            "button:contains('close')",
+            "button:contains('dismiss')",
+            "button:contains('X')",
+            "a:contains('close')",
+            "#close",
+            ".close",
+            ".modal-close"
+        ]
+
+        for selector in close_button_selectors:
+            try:
+                element = await self._page.query_selector(selector)
+                if element and await element.is_visible():
+                    await element.click()
+                    logger.info(f"Clicked close button with selector: {selector}")
+                    await asyncio.sleep(1)  # Wait for modal to disappear
+                    self.current_state = AgentState.RECOVERING
+                    return True
+            except Exception as e:
+                logger.error(f"Error trying to close modal with {selector}: {e}")
+
+        logger.warning("Could not handle unexpected modal. No close button found.")
+        return False
+
+    async def execute_instruction_with_state_management(self, instruction: Any) -> Any:
+        """
+        Execute a single instruction with state management to handle unexpected states.
+
+        Args:
+            instruction: The instruction to execute.
+
+        Returns:
+            Any: Result of the instruction execution.
+        """
+        if not self._page:
+            raise RuntimeError("Browser page not initialized. Call start() first.")
+
+        # Check initial state before execution
+        detected_state = await self._check_page_state()
+        if detected_state != self.current_state and detected_state not in [AgentState.IDLE, AgentState.EXECUTING]:
+            success = await self._handle_state_transition(detected_state)
+            if not success and detected_state == AgentState.FATAL_ERROR:
+                raise RuntimeError("Fatal error detected before executing instruction")
+
+        # If in a normal state, proceed with execution
+        if self.current_state in [AgentState.IDLE, AgentState.EXECUTING]:
+            action_type = instruction.action_type if hasattr(instruction, 'action_type') else instruction.get('action_type', None)
+            if not action_type:
+                raise ValueError("Instruction does not have an action type")
+
+            executor = self.executors.get(action_type)
+            if not executor:
+                error_msg = f"No executor found for action type '{action_type.value if hasattr(action_type, 'value') else action_type}'"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            logger.info(f"Executing instruction with action type: {action_type}")
+            try:
+                result = await executor.execute(self._page, instruction)
+                logger.info(f"Successfully executed instruction: {action_type}")
+                self._actions_completed += 1
+
+                # Check state after execution to catch any immediate issues
+                post_execution_state = await self._check_page_state()
+                if post_execution_state not in [AgentState.IDLE, AgentState.EXECUTING]:
+                    await self._handle_state_transition(post_execution_state)
+
+                return result
+            except Exception as e:
+                logger.error(f"Error executing instruction {action_type}: {e}", exc_info=True)
+                raise
+        else:
+            logger.warning(f"Skipping instruction execution due to current state: {self.current_state.value}")
             return None
 
-        extracted_values = []
-        for el in elements:
-            value = None
-            if instruction.attribute:
-                value = await el.get_attribute(instruction.attribute)
-            else:
-                value = await el.text_content()
-            if value is not None:
-                extracted_values.append(value.strip())
-        
-        result_key = instruction.selector # Use selector as key for extracted data
-        if instruction.multiple:
-            self._extracted_data[result_key] = extracted_values
-            return extracted_values
-        else:
-            final_value = extracted_values[0] if extracted_values else None
-            self._extracted_data[result_key] = final_value
-            return final_value
+    async def execute_instructions(self, instructions: List[Any]) -> List[Any]:
+        """
+        Execute a list of instructions with state management.
 
-    async def _handle_navigate(self, instruction: NavigateInstruction):
-        if not self._page: raise BrowserAgentError("Page not available")
-        try:
-            await self._page.goto(
-                instruction.url, 
-                wait_until=instruction.wait_until.value if instruction.wait_until else "load", 
-                timeout=instruction.timeout or self.default_timeout
-            )
-        except Exception as e:
-            raise InstructionExecutionError(instruction.dict(), f"Navigation to {instruction.url} failed: {e}")
+        Args:
+            instructions: List of instructions to execute.
 
-    async def _handle_evaluate(self, instruction: EvaluateInstruction) -> Any:
-        if not self._page: raise BrowserAgentError("Page not available")
-        try:
-            result = await self._page.evaluate(instruction.script)
-            if instruction.return_by_value:
-                # Store result with a generic key or one derived from script if possible
-                eval_key = f"eval_result_{len(self._extracted_data)}"
-                self._extracted_data[eval_key] = result
-            return result
-        except Exception as e:
-            raise InstructionExecutionError(instruction.dict(), f"JavaScript evaluation failed: {e}")
+        Returns:
+            List[Any]: List of results from each instruction execution.
+        """
+        results = []
+        for instruction in instructions:
+            try:
+                result = await self.execute_instruction_with_state_management(instruction)
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Failed to execute instruction: {e}", exc_info=True)
+                self._errors.append({"type": "ExecutionError", "message": str(e)})
+                results.append(None)
+                if self.current_state == AgentState.FATAL_ERROR:
+                    logger.error("Stopping execution due to fatal error")
+                    break
+        return results
 
-    async def _handle_upload(self, instruction: UploadInstruction):
-        if not self._page: raise BrowserAgentError("Page not available")
-        element = await self._get_element(instruction.selector, instruction.timeout)
-        # Ensure files exist before attempting upload
-        for file_path in instruction.files:
-            if not Path(file_path).is_file():
-                raise InstructionExecutionError(instruction.dict(), f"File not found for upload: {file_path}")
-        await element.set_input_files(instruction.files)
-        if not instruction.no_wait_after:
-             await self._page.wait_for_load_state("networkidle", timeout=instruction.timeout or self.default_timeout)
+    # --- Existing Methods (unchanged, for context) ---
+    async def start(self) -> None:
+        """
+        Start the browser agent, initializing Playwright and browser context.
+        """
+        logger.info(f"Starting browser agent {self.identity_id}")
+        self._playwright = await async_playwright().start()
+        browser_type = self._playwright.chromium  # Default to chromium
+        self._browser = await browser_type.launch(headless=self.config.get('headless', True))
+        self._context = await self._browser.new_context()
+        self._page = await self._context.new_page()
+        self.current_state = AgentState.IDLE
+        logger.info(f"Browser agent {self.identity_id} started")
 
-    async def _handle_download(self, instruction: DownloadInstruction):
-        if not self._page or not self._context: raise BrowserAgentError("Page or context not available")
-        
-        # Ensure downloads directory exists (should be handled in __init__)
-        # self.downloads_path
-        target_path = Path(self.downloads_path) / instruction.save_as
+    async def shutdown(self) -> None:
+        """
+        Shutdown the browser agent, closing all connections.
+        """
+        logger.info(f"Shutting down browser agent {self.identity_id}")
+        if self._page:
+            await self._page.close()
+        if self._context:
+            await self._context.close()
+        if self._browser:
+            await self._browser.close()
+        if self._playwright:
+            await self._playwright.stop()
+        self.current_state = AgentState.IDLE
+        logger.info(f"Browser agent {self.identity_id} shut down")
 
-        async with self._page.expect_download(timeout=instruction.timeout or self.default_timeout) as download_info:
-            # This assumes the download is triggered by clicking an element.
-            # If download is triggered differently, this part needs adjustment.
-            if instruction.selector: # If a selector is provided, click it to trigger download
-                 element_to_click = await self._get_element(instruction.selector, instruction.timeout)
-                 await element_to_click.click()
-            # If no selector, the download must be triggered by a previous action (e.g. navigation)
-        
-        download = await download_info.value
-        await download.save_as(target_path)
-        logger.info(f"File downloaded to: {target_path}")
-        # Store path to downloaded file
-        self._extracted_data[f"downloaded_file_{instruction.save_as.replace('.', '_')}"] = str(target_path)
+    # --- Other methods remain unchanged ---
 
-    # Public API methods matching the prompt's Technical Specifications
     async def take_screenshot(self, full_page=False, filename: Optional[str] = None) -> str:
         """Capture screenshot and return base64 or file path."""
         instruction = ScreenshotInstruction(
@@ -1006,7 +984,7 @@ class PlaywrightBrowserAgent:
             save_to_disk=bool(filename), # Save if filename is provided
             return_as_base64=not bool(filename) # Return base64 if no filename
         )
-        return await self._handle_screenshot(instruction) or ""
+        return await self.executors[ActionType.SCREENSHOT].execute(self._page, instruction) or ""
 
     async def extract_page_data(self, selectors: List[str]) -> Dict[str, Any]:
         """Extract data from specified page elements."""
@@ -1014,7 +992,7 @@ class PlaywrightBrowserAgent:
         for selector in selectors:
             instruction = ExtractInstruction(type=ActionType.EXTRACT, selector=selector, multiple=False) # Assuming single extract per selector
             try:
-                value = await self._handle_extract(instruction)
+                value = await self.executors[ActionType.EXTRACT].execute(self._page, instruction)
                 extracted_results[selector] = value
             except Exception as e:
                 logger.error(f"Error extracting data for selector {selector}: {e}")
