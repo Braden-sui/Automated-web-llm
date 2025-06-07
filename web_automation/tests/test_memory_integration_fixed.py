@@ -41,51 +41,72 @@ async def test_memory_enhanced_agent(test_mem0_config):
 
     # Test memory operations
     if agent.memory_manager:
-        # Use more factual content that Mem0 will store
-        test_text = f"User {agent.identity_id} successfully clicked on the login button using selector #login-btn"
-        test_metadata = {"type": "automation_pattern", "success": True}
+        # Define a clear, factual statement for testing semantic search
+        original_fact = "The official support channel for critical system outages is the emergency hotline: 555-123-4567."
+        test_metadata = {"type": "emergency_contact", "source": "test_suite_infer_false_storage"}
         
-        # Add memory with infer=False to force storage
-        add_result = agent.memory_manager.memory.add(
-            test_text,
+        # Add memory with infer=False to GUARANTEE storage and get an ID
+        print(f"Attempting to add memory with infer=False: '{original_fact}'")
+        add_response = agent.memory_manager.memory.add(
+            original_fact,
             user_id=agent.identity_id,
             metadata=test_metadata,
-            infer=False  # This forces Mem0 to store without LLM filtering
+            infer=False  # Guarantee storage, bypassing LLM fact extraction for add
         )
         
-        # Verify add operation
-        assert add_result is not None
-        print(f"Add result: {add_result}")  # Debug output
+        print(f"Add response (infer=False): {add_response}")
+        assert add_response is not None, "Add operation with infer=False should return a response."
+
+        # Extract the ID of the added memory. 
+        # With infer=False, mem0 should directly return the ID of the stored item or a list containing it.
+        added_memory_id = None
+        if isinstance(add_response, list) and len(add_response) > 0 and add_response[0].get('id'):
+            # Common response format for infer=False is a list of stored items
+            added_memory_id = add_response[0]['id']
+        elif isinstance(add_response, dict) and add_response.get('id'): 
+            # Some versions might return a dict with an id directly
+            added_memory_id = add_response['id']
+        elif isinstance(add_response, dict) and add_response.get('results') and len(add_response['results']) > 0 and add_response['results'][0].get('id'):
+            # Or nested within 'results'
+            added_memory_id = add_response['results'][0]['id']
+
+        assert added_memory_id is not None, f"Failed to retrieve an ID for the memory added with infer=False. Response: {add_response}"
+        print(f"Stored memory with ID (infer=False): {added_memory_id}")
+
+        # Allow some time for indexing, though infer=False might be quicker
+        await asyncio.sleep(1) 
         
-        # Check if results exist (might be empty if Mem0 skips)
-        if "results" in add_result and len(add_result["results"]) == 0:
-            print("Mem0 skipped storage - trying with better content...")
-            # Try again with even more explicit factual content
-            better_text = f"The user with ID {agent.identity_id} prefers using Chrome browser and has successfully automated login processes 3 times this week."
-            add_result = agent.memory_manager.memory.add(
-                better_text,
-                user_id=agent.identity_id,
-                metadata=test_metadata,
-                infer=False
-            )
-        
-        # Search for any memories for this user
+        # Search for a semantically related concept. The search itself will use mem0's LLM capabilities.
+        search_query = "How do I report a critical system failure?"
+        print(f"Searching for: '{search_query}' (tests semantic retrieval)")
         search_results = agent.memory_manager.memory.search(
-            query="user automation",  # Broader search
+            query=search_query,
             user_id=agent.identity_id,
-            limit=5
+            limit=3  # We expect our fact in the top 3
         )
         
-        print(f"Search results: {search_results}")  # Debug output
+        print(f"Search results: {search_results}")
+        assert search_results is not None, "Search operation should return results."
         
-        # Also try getting all memories for this user
-        all_memories = agent.memory_manager.memory.get_all(user_id=agent.identity_id)
-        print(f"All memories: {all_memories}")  # Debug output
+        # Verify that the original memory (by ID) is in the top 3 results
+        found_in_top_results = False
+        retrieved_texts = []
+        # mem0.search typically returns a list of dicts, or a dict with a 'results' key containing the list
+        results_list = []
+        if isinstance(search_results, list):
+            results_list = search_results
+        elif isinstance(search_results, dict) and 'results' in search_results:
+            results_list = search_results['results']
+
+        for result in results_list:
+            retrieved_texts.append(result.get('text', ''))
+            if result.get('id') == added_memory_id:
+                found_in_top_results = True
+                break
         
-        # Verify we can retrieve something
-        assert search_results is not None
-        # More lenient assertion - just check that search works
-        assert "results" in search_results or isinstance(search_results, list)
+        assert found_in_top_results, \
+            f"Original memory (ID: {added_memory_id}, Text: '{original_fact}') not found in top 3 search results for query '{search_query}'.\nRetrieved texts: {retrieved_texts}"
+
     
     async with agent:
         # Test page navigation

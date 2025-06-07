@@ -69,6 +69,9 @@ class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
         else:
             logger.info("VisualMemorySystem not initialized (disabled or missing dependencies). Visual fallback/analysis disabled.")
 
+        # Initialize session statistics
+        self.interactions_stored_session = 0
+
     async def _capture_visuals_if_enabled(self, action_type: str, target_selector: Optional[str] = None):
         if not self.visual_system_enabled or not self.visual_system or not self.visual_auto_capture:
             return
@@ -141,31 +144,43 @@ class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
         if success:
             logger.info(f"smart_selector_click SUCCEEDED for '{target_description}' using: {reason_or_selector_used}")
             if self.memory_manager:
+                success_metadata = {
+                    "action_type": "smart_selector_click",
+                    "status": "success",
+                    "url": page_url,
+                    "original_target_description": target_description # Keep original if needed
+                }
                 self.memory_manager.store_automation_pattern(
                     user_id=self.identity_id,
-                    action_type="smart_selector_click",
-                    target_description=target_description,
-                    selector_used=reason_or_selector_used,
-                    status="success",
-                    original_fallback_selector=fallback_selector,
-                    url=page_url
+                    description=target_description, # Mapped from target_description
+                    selector=reason_or_selector_used,    # Mapped from selector_used
+                    success=True,
+                    fallback_selector=fallback_selector, # Passed as original_fallback_selector
+                    metadata=success_metadata
                 )
+                self.interactions_stored_session += 1
             await self._capture_visuals_if_enabled(action_type="smart_selector_click_success", target_selector=reason_or_selector_used)
             return True
         else:
             # Standard selectors failed, log this failure
             logger.warning(f"smart_selector_click FAILED for '{target_description}' using standard selectors. Reason: {reason_or_selector_used}")
             if self.memory_manager:
+                failure_metadata = {
+                    "action_type": "smart_selector_click",
+                    "status": "failure_selectors",
+                    "failure_reason": reason_or_selector_used,
+                    "url": page_url,
+                    "original_target_description": target_description # Keep original if needed
+                }
                 self.memory_manager.store_automation_pattern(
                     user_id=self.identity_id,
-                    action_type="smart_selector_click",
-                    target_description=target_description,
-                    selector_used=fallback_selector or "N/A", # Log against fallback or N/A
-                    status="failure_selectors",
-                    failure_reason=reason_or_selector_used,
-                    original_fallback_selector=fallback_selector,
-                    url=page_url
+                    description=target_description, # Mapped from target_description
+                    selector=fallback_selector or "N/A", # Mapped from selector_used (or N/A)
+                    success=False,
+                    fallback_selector=fallback_selector, # Passed as original_fallback_selector
+                    metadata=failure_metadata
                 )
+                self.interactions_stored_session += 1
             
             # Attempt visual fallback if enabled and page is available
             if self.visual_system_enabled and self.visual_system and self._page and not self._page.is_closed():
@@ -221,5 +236,5 @@ class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
         # For now, just indicate memory is enabled.
         return {
             "memory_enabled": True,
-            # "interactions_stored_session": interactions_count # Example if get_all was suitable
+            "interactions_stored_session": self.interactions_stored_session
         }
