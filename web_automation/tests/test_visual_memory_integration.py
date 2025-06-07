@@ -9,6 +9,7 @@ from web_automation.config.config_models import Mem0AdapterConfig, VisualSystemC
 from web_automation.core.dependencies import BrowserAgentFactory
 from web_automation.memory.memory_enhanced_agent import PersistentMemoryBrowserAgent
 import transformers.utils.logging as hf_logging
+import os
 
 # Configure test logging
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def test_mem0_config_for_visual_tests():
         qdrant_embedding_model_dims=384,
         mem0_version="v1.1",
         llm_provider="ollama",
-        llm_model="qwen2:0.5b",
+        llm_model=os.getenv("MEMORY_LLM_MODEL", "qwen2:0.5b"),
         llm_temperature=0.1,
         api_key=None
     )
@@ -46,18 +47,23 @@ def test_visual_system_config():
     return VisualSystemConfig(
         enabled=True,
         auto_capture=True,  # Required for visual memory tests
-        model_name="qwen2.5vl:7b",
+        model_name=os.getenv("VISUAL_SYSTEM_MODEL", "qwen2.5vl:7b"),
         ollama_base_url=None
     )
 
 @pytest.fixture
-def mock_ollama_chat_response():
-    return {
-        "model": "qwen2.5vl:7b",
-        "created_at": "2024-07-29T12:00:00.000Z",
-        "message": {"role": "assistant", "content": TEST_LLM_DESCRIPTION, "images": None},
-        "done": True,
+def mock_ollama_client(mocker):
+    mock_client = mocker.AsyncMock()
+    mock_client.chat.return_value = {
+        "model": os.getenv("VISUAL_SYSTEM_MODEL", "qwen2.5vl:7b"),
+        "created_at": "2025-01-01T00:00:00.000000000Z",
+        "message": {
+            "role": "assistant",
+            "content": "I see a login button in the top right corner, a search bar in the center, and a navigation menu on the left side."
+        },
+        "done": True
     }
+    return mock_client
 
 @pytest.fixture
 def real_browser_config():
@@ -110,7 +116,7 @@ def assert_real_memory_storage(spy_store, agent_id):
     # Real screenshot should be much larger than our test placeholder
     assert len(visual_data['screenshot_base64']) > len(TEST_SCREENSHOT_BASE64)
 
-def setup_essential_mocks(mocker, mock_ollama_chat_response):
+def setup_essential_mocks(mocker, mock_ollama_client):
     """Set up only the essential mocks needed for testing."""
     # Mock SentenceTransformer to prevent actual model loading
     mock_st_instance = MagicMock(name="MockedSentenceTransformerInstance")
@@ -124,11 +130,9 @@ def setup_essential_mocks(mocker, mock_ollama_chat_response):
     mocker.patch('sentence_transformers.SentenceTransformer', side_effect=st_constructor_side_effect)
     
     # Mock Ollama for vision processing
-    mock_async_ollama_client = AsyncMock()
-    mock_async_ollama_client.chat = AsyncMock(return_value=mock_ollama_chat_response)
-    mocker.patch('ollama.AsyncClient', return_value=mock_async_ollama_client)
+    mocker.patch('ollama.AsyncClient', return_value=mock_ollama_client)
     
-    return mock_async_ollama_client
+    return mock_ollama_client
 
 # =============================================================================
 # TESTS
@@ -138,7 +142,7 @@ def setup_essential_mocks(mocker, mock_ollama_chat_response):
 async def test_visual_memory_with_real_webpages(
     test_mem0_config_for_visual_tests,
     test_visual_system_config,
-    mock_ollama_chat_response,
+    mock_ollama_client,
     real_browser_config,
     test_urls,
     mocker
@@ -148,7 +152,7 @@ async def test_visual_memory_with_real_webpages(
     print("🌐 Starting real webpage visual memory integration test")
     
     # Set up essential mocks only
-    mock_ollama_client = setup_essential_mocks(mocker, mock_ollama_chat_response)
+    mock_ollama_client = setup_essential_mocks(mocker, mock_ollama_client)
     
     agent_identity_id = f'test_visual_agent_{uuid.uuid4().hex[:8]}'
     
@@ -346,7 +350,7 @@ async def test_visual_memory_with_real_webpages(
 async def test_visual_memory_interactive(
     test_mem0_config_for_visual_tests,
     test_visual_system_config,
-    mock_ollama_chat_response,
+    mock_ollama_client,
     test_urls,
     mocker
 ):
@@ -356,7 +360,7 @@ async def test_visual_memory_interactive(
     print("👀 Browser will be visible for manual observation")
     
     # Set up essential mocks
-    mock_ollama_client = setup_essential_mocks(mocker, mock_ollama_chat_response)
+    mock_ollama_client = setup_essential_mocks(mocker, mock_ollama_client)
     
     agent = BrowserAgentFactory.create_agent(
         memory_config={'enabled': True, **test_mem0_config_for_visual_tests.model_dump()},
@@ -390,7 +394,7 @@ async def test_visual_memory_interactive(
 async def test_visual_memory_and_fallback_mocked(
     test_mem0_config_for_visual_tests,
     test_visual_system_config,
-    mock_ollama_chat_response,
+    mock_ollama_client,
     mocker
 ):
     """Legacy test with mocks - kept for comprehensive testing."""
@@ -398,7 +402,7 @@ async def test_visual_memory_and_fallback_mocked(
     print("🔧 Running legacy mocked visual memory test")
     
     # Set up essential mocks
-    mock_ollama_client = setup_essential_mocks(mocker, mock_ollama_chat_response)
+    mock_ollama_client = setup_essential_mocks(mocker, mock_ollama_client)
     
     # Mock page screenshot for controlled testing
     mock_page_screenshot = AsyncMock(return_value=TEST_SCREENSHOT_BYTES)

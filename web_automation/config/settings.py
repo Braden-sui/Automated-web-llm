@@ -138,26 +138,21 @@ class SecurityConfig:
 class CaptchaConfig(BaseModel):
     """Configuration for local vision-based CAPTCHA solving"""
     ENABLED: bool = os.getenv("CAPTCHA_ENABLED", "True").lower() == "true"
-    
-    CAPTCHA_VISION_MODEL_NAME: str = os.getenv("CAPTCHA_VISION_MODEL_NAME", "qwen2.5-vl:7b") 
+    CAPTCHA_VISION_MODEL_NAME: str = os.getenv("CAPTCHA_MODEL", "qwen2.5-vl:7b")
     CAPTCHA_MAX_ATTEMPTS: int = int(os.getenv("CAPTCHA_MAX_ATTEMPTS", "3"))
-    
-    SOLVE_TIMEOUT_SECONDS: int = int(os.getenv("CAPTCHA_SOLVE_TIMEOUT_SECONDS", "30")) 
+    SOLVE_TIMEOUT_SECONDS: int = int(os.getenv("CAPTCHA_SOLVE_TIMEOUT_SECONDS", "30"))
     USE_OCR_FALLBACK: bool = os.getenv("CAPTCHA_USE_OCR_FALLBACK", "True").lower() == "true"
     PREPROCESS_IMAGES: bool = os.getenv("CAPTCHA_PREPROCESS_IMAGES", "True").lower() == "true"
-    
     CAPTCHA_RETRY_DELAY_MS: int = int(os.getenv("CAPTCHA_RETRY_DELAY_MS", "2000"))
     CAPTCHA_POST_SUBMIT_DELAY_MS: int = int(os.getenv("CAPTCHA_POST_SUBMIT_DELAY_MS", "3000"))
-    
     _default_success_texts = "captcha solved,verification successful,challenge complete,thank you"
     CAPTCHA_SUCCESS_TEXTS: List[str] = [
-        s.strip() for s in os.getenv("CAPTCHA_SUCCESS_TEXTS", _default_success_texts).split(',') if s.strip()
-    ]
-    
+            s.strip() for s in os.getenv("CAPTCHA_SUCCESS_TEXTS", _default_success_texts).split(',') if s.strip()
+        ]
     _default_failure_texts = "incorrect captcha,verification failed,try again,error,invalid code,challenge failed"
     CAPTCHA_FAILURE_TEXTS: List[str] = [
-        s.strip() for s in os.getenv("CAPTCHA_FAILURE_TEXTS", _default_failure_texts).split(',') if s.strip()
-    ]
+            s.strip() for s in os.getenv("CAPTCHA_FAILURE_TEXTS", _default_failure_texts).split(',') if s.strip()
+        ]
 
 
 anti_detection_config = AntiDetectionConfig()

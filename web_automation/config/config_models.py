@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
+import os
 
 class BrowserConfig(BaseModel):
     DEFAULT_BROWSER_TYPE: str = Field("chromium", description="Default browser type (chromium, firefox, webkit)")
@@ -34,44 +35,33 @@ class GeneralConfig(BaseModel):
     PROFILES_DIR: str = Field("web_automation/profiles", description="Directory to store user profiles")
 
 class Mem0AdapterConfig(BaseModel):
-    api_key: Optional[str] = Field(
-        None, 
-        description="API key for Mem0 AI. If None, mem0ai might use environment variables."
-    )
+    """
+    Configuration for Mem0 AI adapter for browser automation memory.
+    Includes LLM, embedder, and vector store settings.
+    """
+    # Qdrant Configuration
+    qdrant_path: Optional[str] = Field(None, description="Path to Qdrant DB if on-disk. None for in-memory.")
+    qdrant_on_disk: bool = Field(False, description="Whether to store Qdrant DB on disk (True) or in-memory (False).")
+    qdrant_collection_name: str = Field("browser_automation_memory", description="Collection name for Qdrant vector store.")
+    qdrant_embedding_model_dims: int = Field(384, description="Dimensions of embedding model for Qdrant (e.g., 384 for all-MiniLM-L6-v2).")
+    
+    # Mem0 Version
+    mem0_version: str = Field("v1.1", description="Mem0 AI library version compatibility (v1.0 or v1.1).")
+    
+    # LLM Configuration
+    llm_provider: str = Field("ollama", description="LLM provider for Mem0 (e.g., 'ollama', 'openai').")
+    llm_model: str = Field(default=os.getenv("MEMORY_LLM_MODEL", "qwen2.5vl:7b"), description="LLM model name for Mem0 (e.g., 'qwen2.5vl:7b' for Ollama). Ensure the model is available for the chosen provider.")
+    llm_temperature: float = Field(0.7, description="Temperature for LLM responses. Lower for factual extraction.")
+    api_key: Optional[str] = Field(None, description="API key if required by provider (None for local Ollama).")
     agent_id: Optional[str] = Field(
         None, 
         description="Specific agent ID for Mem0 AI, if applicable."
-    )
-    
-    # Qdrant specific configuration for Mem0's vector store
-    qdrant_path: Optional[str] = Field(
-        None, 
-        description="Path for Qdrant local storage. Set to None for in-memory (if on_disk is False and path is None)."
-    )
-    qdrant_on_disk: Optional[bool] = Field(
-        False, 
-        description="Whether Qdrant should store data on disk. If False and path is None, attempts in-memory."
     )
     qdrant_collection_name: Optional[str] = Field(
         "mem0_default_collection", 
         description="Name of the Qdrant collection to use. Helps isolate test data."
     )
-    qdrant_embedding_model_dims: Optional[int] = Field(
-        None, 
-        description="Dimension for Qdrant collection vectors, e.g., 384 for all-MiniLM-L6-v2. Corresponds to 'embedding_model_dims' in Qdrant config via Mem0."
-    )
-    mem0_version: str = Field("v1.1", description="Mem0 configuration version.")
-    llm_provider: str = Field("openai", description="LLM provider for Mem0 (e.g., 'openai', 'ollama').")
-    llm_model: str = Field("gpt-4o-mini", description="LLM model name for Mem0 (e.g., 'gpt-4o-mini' for OpenAI, 'llama3' for Ollama). Ensure the model is available for the chosen provider.")
-    llm_temperature: float = Field(0.1, description="LLM temperature for Mem0.")
     llm_base_url: Optional[str] = Field(None, description="Base URL for the LLM provider, if not default (e.g., for a self-hosted Ollama instance on a different port/host).")
-    # Future consideration: host/port for remote Qdrant
-    # qdrant_host: Optional[str] = Field(None, description="Hostname for a remote Qdrant instance.")
-    # qdrant_port: Optional[int] = Field(None, description="Port for a remote Qdrant instance.")
-
-    # Placeholder for other Mem0 specific configurations if needed
-    # model_name: Optional[str] = Field(None, description="Model to use for Mem0 AI.")
-    # extra_params: Dict[str, Any] = Field({}, description="Any extra parameters for Mem0 initialization.")
 
 class VisualSystemConfig(BaseModel):
     """
@@ -80,9 +70,8 @@ class VisualSystemConfig(BaseModel):
     """
     enabled: bool = Field(False, description="Enable or disable visual pattern recognition features.")
     auto_capture: bool = Field(False, description="Automatically capture and store screenshots during automation. Default False.")
-    model_name: str = Field("qwen2.5vl:7b", description="The Ollama vision model name to use (e.g., 'qwen2.5vl:7b', 'llava').")
+    model_name: str = Field(default=os.getenv("VISUAL_SYSTEM_MODEL", "qwen2.5vl:7b"), description="The Ollama vision model name to use (e.g., 'qwen2.5vl:7b', 'llava').")
     ollama_base_url: Optional[str] = Field(None, description="Optional base URL for the Ollama server if not running on default localhost:11434.")
-    # Future: Add confidence thresholds, etc.
 
 class Settings(BaseModel):
     browser_config: BrowserConfig = Field(default_factory=BrowserConfig)

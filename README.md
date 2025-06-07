@@ -19,7 +19,7 @@ Advanced web automation system using Playwright with anti-detection capabilities
   - Behavioral fingerprint masking.
 
 - **CAPTCHA Handling**:
-  - Image-based CAPTCHA solving (placeholder, can integrate with local LLMs like `qwen2.5vl:7b`).
+  - Image-based CAPTCHA solving (placeholder, can integrate with local LLMs).
   - reCAPTCHA v2/v3 support (planned).
   - Audio CAPTCHA fallback (planned).
 
@@ -31,8 +31,8 @@ Advanced web automation system using Playwright with anti-detection capabilities
 - **Memory Integration (Mem0 AI)**:
   - Utilizes **Mem0 AI** (`mem0ai` library) to store and retrieve successful (and failed) automation patterns (e.g., CSS selectors for specific UI elements).
   - Employs the `PersistentMemoryBrowserAgent` which enhances the base agent with memory capabilities.
-  - **Local First**: Configured to run with a local Ollama LLM (e.g., `qwen2.5vl:7b`) for processing and a local Qdrant vector store (in-memory or on-disk) for storing embeddings.
-  - This allows the agent to learn from past interactions and improve its selector strategy over time without relying on external cloud services for core memory functions.
+  - **Local First**: Configured to run with a local Ollama LLM for processing and a local Qdrant vector store (in-memory or on-disk) for storing embeddings.
+  - **Semantic Search**: Uses embeddings and similarity to recall successful patterns when encountering similar UI elements or tasks, improving automation over time.
 
 ## Advanced Setup
 
@@ -50,8 +50,7 @@ Advanced web automation system using Playwright with anti-detection capabilities
    - Pull a multimodal LLM if you intend to use vision-based CAPTCHA solving or other vision tasks, or a standard LLM for Mem0 fact extraction:
 
      ```bash
-     ollama pull qwen2.5vl:7b # Example multimodal model
-     ollama pull llama3       # Example general LLM
+     ollama pull ${CAPTCHA_MODEL} # Example multimodal model
      ```
 
    - Ensure Ollama server is running.
@@ -88,15 +87,16 @@ Advanced web automation system using Playwright with anti-detection capabilities
    Example for CAPTCHA vision model (if using local Ollama for vision):
 
    ```env
-   CAPTCHA_VISION_MODEL_NAME=qwen2.5vl:7b
+   CAPTCHA_MODEL=your_preferred_model
    CAPTCHA_VISION_OLLAMA_URL=http://localhost:11434
+   MEMORY_LLM_MODEL=your_preferred_llm_model
    ```
 
 2. **Main Python Configuration (`web_automation/config/settings.py` and `web_automation/config/config_models.py`)**:
    - `settings.py`: General application settings (e.g., `BROWSER_HEADLESS`).
    - `config_models.py`: Contains Pydantic models for structured configuration, including `Mem0AdapterConfig`.
      - `Mem0AdapterConfig` defines the setup for Mem0 AI, including:
-       - LLM provider (e.g., `ollama`), model name (e.g., `qwen2.5vl:7b`), temperature.
+       - LLM provider (e.g., `ollama`), model name, temperature.
        - Embedder provider (`huggingface`), model (`sentence-transformers/all-MiniLM-L6-v2`), and dimensions (384).
        - Vector store provider (`qdrant`), collection name, and whether it runs in-memory or on-disk.
 
@@ -108,12 +108,13 @@ Using the memory-enhanced agent:
 from web_automation.core.browser_agent_factory import create_playwright_agent
 from web_automation.config.config_models import Mem0AdapterConfig
 import asyncio
+import os
 
 async def main():
     # Configure Mem0 for local Ollama and in-memory Qdrant
     mem_config = Mem0AdapterConfig(
         llm_provider="ollama",
-        llm_model="qwen2.5vl:7b", # Or your preferred Ollama model
+        llm_model=os.getenv("MEMORY_LLM_MODEL"), 
         qdrant_on_disk=False, # In-memory
         qdrant_embedding_model_dims=384
     )
@@ -127,11 +128,7 @@ async def main():
     async with agent:
         await agent.navigate("https://example.com")
         # Example of using smart_selector_click which leverages memory
-        success = await agent.smart_selector_click(
-            target_description="Main link on example.com",
-            fallback_selector="a[href='https://www.iana.org/domains/example']"
-        )
-        print(f"Click successful: {success}")
+        await agent.smart_selector_click("login button")
 
 if __name__ == "__main__":
     asyncio.run(main())

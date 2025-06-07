@@ -3,6 +3,7 @@ import asyncio
 import logging
 import base64
 import re
+import os
 from typing import Optional, Dict
 from .exceptions import VisionModelUnavailable, CaptchaSolveFailed
 
@@ -14,7 +15,7 @@ class OllamaVisionSolver:
     Supports multiple backends: Ollama, Transformers, OCR fallback.
     """
     
-    def __init__(self, model_name: str = "llava:7b"):
+    def __init__(self, model_name: str = os.getenv("CAPTCHA_MODEL", "llava:7b")):
         self.model_name = model_name
         self.backend = self._detect_available_backend()
         self.solve_attempts = 0

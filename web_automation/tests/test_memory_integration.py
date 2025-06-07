@@ -2,6 +2,7 @@ import asyncio
 import pytest
 import uuid
 import logging
+import os
 from web_automation.config.config_models import Mem0AdapterConfig
 from web_automation.core.dependencies import BrowserAgentDependencies, BrowserAgentFactory
 from web_automation.memory.memory_manager import Mem0BrowserAdapter
@@ -20,10 +21,26 @@ def test_mem0_config():
         qdrant_embedding_model_dims=384,  # For all-MiniLM-L6-v2 embedder
         mem0_version="v1.1",
         llm_provider="ollama",
-        llm_model="qwen2.5vl:7b",
+        llm_model=os.getenv("MEMORY_LLM_MODEL", "qwen2.5vl:7b"),
         llm_temperature=0.7,
         api_key=None  # Not needed for Ollama
     )
+
+@pytest.fixture
+def test_memory_manager(test_mem0_config):
+    from web_automation.memory.memory_manager import Mem0BrowserAdapter
+    config = Mem0AdapterConfig(
+        qdrant_path=None,
+        qdrant_on_disk=False,
+        qdrant_collection_name=f"test_mem_collection_{uuid.uuid4().hex[:10]}",
+        qdrant_embedding_model_dims=384,
+        mem0_version="v1.1",
+        llm_provider="ollama",
+        llm_model=os.getenv("MEMORY_LLM_MODEL", "qwen2.5vl:7b"),
+        llm_temperature=0.7,
+        api_key=None
+    )
+    return Mem0BrowserAdapter(config)
 
 @pytest.mark.asyncio
 async def test_memory_enhanced_agent(test_mem0_config):
@@ -166,13 +183,13 @@ def test_memory_config():
         qdrant_embedding_model_dims=384,
         mem0_version="v1.1",
         llm_provider="ollama",
-        llm_model="qwen2.5vl:7b",
+        llm_model=os.getenv("MEMORY_LLM_MODEL", "qwen2.5vl:7b"),
         llm_temperature=0.7,
         api_key=None
     )
     
     # Verify configuration
     assert config.llm_provider == "ollama"
-    assert config.llm_model == "qwen2.5vl:7b"
+    assert config.llm_model == os.getenv("MEMORY_LLM_MODEL", "qwen2.5vl:7b")
     assert config.qdrant_embedding_model_dims == 384
     assert not config.qdrant_on_disk

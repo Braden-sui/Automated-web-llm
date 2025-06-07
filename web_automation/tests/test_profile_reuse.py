@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 from web_automation import create_playwright_agent
 from web_automation.config.config_models import Mem0AdapterConfig
+import uuid
 
 # Test data
 TEST_PROFILES_DIR = Path(__file__).resolve().parent.parent / "profiles"
@@ -52,7 +53,7 @@ async def test_setup():
         qdrant_embedding_model_dims=384,
         mem0_version="v1.1",
         llm_provider="ollama",
-        llm_model="qwen2.5vl:7b",
+        llm_model=os.getenv("MEMORY_LLM_MODEL", "qwen2.5vl:7b"),
         llm_temperature=0.1,
         api_key=None
     )

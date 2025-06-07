@@ -17,7 +17,7 @@ class ImageAnalyzer:
     Supports image description, OCR, UI element identification, and comparison.
     """
     
-    def __init__(self, model_name: str = "qwen2.5vl:7b", ollama_base_url: str = "http://localhost:11434"):
+    def __init__(self, model_name: str = os.getenv("VISUAL_SYSTEM_MODEL", "qwen2.5vl:7b"), ollama_base_url: str = "http://localhost:11434"):
         """Initialize ImageAnalyzer with specified LLM model."""
         self.model_name = model_name
         self.llm_client = AsyncClient(host=ollama_base_url)

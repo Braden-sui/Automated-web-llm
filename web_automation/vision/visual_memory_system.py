@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 import logging
 import base64
 import ollama # Assuming ollama client library is used
+import os
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ class VisualMemorySystem:
     Leverages vision capabilities to create visual-based automation memory.
     """
 
-    def __init__(self, llm_client: ollama.AsyncClient, memory_manager: Any, llm_model_name: str = "qwen2.5vl:7b"):
+    def __init__(self, llm_client: ollama.AsyncClient, memory_manager: Any, llm_model_name: str = os.getenv("VISUAL_SYSTEM_MODEL", "qwen2.5vl:7b")):
         """
         Initialize the VisualMemorySystem.
 
@@ -311,4 +312,3 @@ async def example_visual_system_usage(page: Page, ollama_client: ollama.AsyncCli
             logger.info("Successfully recovered using visual fallback!")
         else:
             logger.error("Visual fallback also failed.")
-
