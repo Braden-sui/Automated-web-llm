@@ -111,28 +111,51 @@ def generate_canvas_noise() -> float:
     """Generate subtle canvas noise value."""
     return random.uniform(0.0001, 0.001)
 
+_PLATFORM_TIMEZONES = {
+    "Win32": [
+        "America/New_York", "America/Los_Angeles", "America/Chicago", 
+        "Europe/London", "America/Toronto", "Asia/Shanghai"
+    ],
+    "MacIntel": [
+        "America/New_York", "America/Los_Angeles", "America/Denver", 
+        "Europe/Paris", "America/Toronto", "Asia/Tokyo"
+    ],
+    "Linux x86_64": [
+        "Europe/London", "Europe/Berlin", "America/New_York", 
+        "Asia/Tokyo", "Australia/Sydney", "America/Chicago"
+    ]
+}
+
+def _get_platform_from_ua(user_agent: str) -> str:
+    """Determines a platform string based on keywords in the user agent."""
+    ua_lower = user_agent.lower()
+    if "windows" in ua_lower:
+        return "Win32"
+    elif "macintosh" in ua_lower or "mac os x" in ua_lower:
+        return "MacIntel"
+    elif "linux" in ua_lower or "x11" in ua_lower: # X11 is common in Linux UAs
+        return "Linux x86_64"
+    else:
+        # Fallback if UA is unclear, defaults to Linux as per original implicit logic
+        # Consider logging a warning here if this case is reached frequently
+        return "Linux x86_64" 
+
+def _get_timezone_for_platform(platform: str) -> str:
+    """Returns a random timezone suitable for the given platform."""
+    return random.choice(_PLATFORM_TIMEZONES.get(platform, COMMON_TIMEZONES))
+
 def create_consistent_fingerprint() -> dict:
     """Create a consistent set of fingerprint values that work together."""
     user_agent = get_random_user_agent()
-    viewport = get_random_viewport()
-    
-    # Extract OS info from user agent for consistent platform
-    if "Windows" in user_agent:
-        platform = "Win32"
-        timezone = random.choice(["America/New_York", "America/Los_Angeles", "America/Chicago"])
-    elif "Macintosh" in user_agent:
-        platform = "MacIntel"
-        timezone = random.choice(["America/New_York", "America/Los_Angeles", "America/Denver"])
-    else:
-        platform = "Linux x86_64"
-        timezone = random.choice(["Europe/London", "Europe/Berlin", "America/New_York"])
+    platform = _get_platform_from_ua(user_agent)
+    timezone = _get_timezone_for_platform(platform)
     
     return {
         "user_agent": user_agent,
         "platform": platform,
         "languages": get_random_accept_language().split(','),
         "timezone": timezone,
-        "viewport": viewport,
+        "viewport": get_random_viewport(),
         "webgl": get_random_webgl_info()
     }
 

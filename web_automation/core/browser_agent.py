@@ -30,7 +30,8 @@ from pydantic import ValidationError
 from ..memory.memory_manager import Mem0BrowserAdapter
 
 from ..config import settings
-from ..config.settings import mem0_adapter_config # Import the specific config
+from ..config.settings import mem0_adapter_config, reasoning_config # Import the specific config
+from ..reasoning.reasoning_engine import WebAutomationReasoner
 from ..models.instructions import (
     InstructionSet,
     BrowserInstruction,
@@ -146,6 +147,7 @@ class PlaywrightBrowserAgent:
         
         self._reset_execution_state()
         self._fingerprint_profile = self._load_or_create_profile()
+        self._init_reasoning_engine() # Initialize reasoning engine
 
     def _reset_execution_state(self):
         self._screenshots = []
@@ -576,65 +578,97 @@ class PlaywrightBrowserAgent:
         # Apply memory insights to instruction
         enhanced_instruction = await self._apply_memory_context(instruction_data, memories)
         
-        # Execute with timing measurement
-        start_time = time.time()
         action_type = getattr(enhanced_instruction, 'type', getattr(instruction_data, 'type'))
         handler = self._get_action_handler(action_type)
-        
+
         if not handler:
             error_msg = f"No handler found for action type '{action_type.value if hasattr(action_type, 'value') else action_type}'"
             logger.error(error_msg)
-            await self._handle_execution_failure(enhanced_instruction, Exception(error_msg))
+            # Create a simple exception for _handle_execution_failure
+            temp_exception = Exception(error_msg)
+            await self._handle_execution_failure(enhanced_instruction, temp_exception)
             self._errors.append({
                 "type": "UnsupportedInstructionError",
                 "instruction_type": action_type.value if hasattr(action_type, 'value') else str(action_type),
                 "message": error_msg
             })
-            raise InstructionExecutionError(
-                getattr(enhanced_instruction, 'dict', lambda: {})(), 
-                error_msg
-            )
-        
-        try:
-            # Execute the enhanced instruction
-            if action_type not in [ActionType.WAIT, ActionType.EVALUATE]:
-                await self._human_like_delay(base_delay_type="before")
+            # Serialize instruction for InstructionExecutionError
+            instruction_dict = {}
+            if hasattr(enhanced_instruction, 'model_dump'): instruction_dict = enhanced_instruction.model_dump()
+            elif hasattr(enhanced_instruction, 'dict'): instruction_dict = enhanced_instruction.dict()
+            else:
+                try: instruction_dict = vars(enhanced_instruction)
+                except TypeError: instruction_dict = {"type": str(action_type), "error": "Could not serialize instruction"}
+            raise InstructionExecutionError(instruction_dict, error_msg)
+
+        # --- Retry Logic Start ---
+        total_attempts = getattr(enhanced_instruction, 'retry_attempts', 1)
+        retry_delay_ms = getattr(enhanced_instruction, 'retry_delay', 1000)
+
+        if not isinstance(total_attempts, int) or total_attempts < 1:
+            logger.warning(f"Invalid retry_attempts ({total_attempts}) for {action_type}. Defaulting to 1.")
+            total_attempts = 1
+        if not isinstance(retry_delay_ms, (int, float)) or retry_delay_ms < 0:
+            logger.warning(f"Invalid retry_delay_ms ({retry_delay_ms}) for {action_type}. Defaulting to 1000ms.")
+            retry_delay_ms = 1000
+
+        last_exception = None
+        start_time_instruction = time.time() # For overall instruction timing including retries
+
+        if action_type not in [ActionType.WAIT, ActionType.EVALUATE]:
+            await self._human_like_delay(base_delay_type="before")
+
+        for attempt in range(total_attempts):
+            try:
+                logger.info(f"Attempt {attempt + 1}/{total_attempts} for instruction: {action_type.value if hasattr(action_type, 'value') else str(action_type)} - Selector: {getattr(enhanced_instruction, 'selector', 'N/A')}")
                 
-            await handler(enhanced_instruction)
-            self._actions_completed += 1
+                await handler(enhanced_instruction) # Core action execution
+                
+                self._actions_completed += 1
+                
+                if action_type not in [ActionType.WAIT, ActionType.EVALUATE]:
+                    await self._human_like_delay(base_delay_type="after")
+                
+                execution_time = time.time() - start_time_instruction
+                await self._store_execution_success(enhanced_instruction, execution_time)
+                
+                action_type_str = action_type.value if hasattr(action_type, 'value') else str(action_type)
+                logger.debug(f"Successfully executed {action_type_str} in {execution_time:.2f}s (attempt {attempt + 1}/{total_attempts}) with memory enhancement")
+                
+                last_exception = None 
+                break 
+
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"Attempt {attempt + 1}/{total_attempts} failed for {action_type.value if hasattr(action_type, 'value') else str(action_type)} ({getattr(enhanced_instruction, 'selector', 'N/A')}): {e}")
+                if attempt < total_attempts - 1:
+                    logger.info(f"Waiting {retry_delay_ms / 1000:.2f}s before next attempt...")
+                    await asyncio.sleep(retry_delay_ms / 1000)
+        # --- Retry Logic End ---
+
+        if last_exception:
+            logger.error(f"All {total_attempts} attempts failed for {action_type.value if hasattr(action_type, 'value') else str(action_type)} ({getattr(enhanced_instruction, 'selector', 'N/A')}). Last error: {last_exception}", exc_info=True)
+            await self._handle_execution_failure(enhanced_instruction, last_exception)
             
-            if action_type not in [ActionType.WAIT, ActionType.EVALUATE]:
-                await self._human_like_delay(base_delay_type="after")
-            
-            # Record success
-            execution_time = time.time() - start_time
-            await self._store_execution_success(enhanced_instruction, execution_time)
-            
-            action_type_str = action_type.value if hasattr(action_type, 'value') else str(action_type)
-            logger.debug(f"Successfully executed {action_type_str} in {execution_time:.2f}s with memory enhancement")
-            
-        except Exception as e:
-            # Learn from failure
-            await self._handle_execution_failure(enhanced_instruction, e)
-            
-            # Handle errors consistently with previous implementation
-            if isinstance(e, InstructionExecutionError):
-                logger.error(f"InstructionExecutionError for {action_type.value if hasattr(action_type, 'value') else str(action_type)} ({getattr(enhanced_instruction, 'selector', 'N/A')}): {getattr(e, 'message', str(e))}")
+            error_type_name = type(last_exception).__name__
+            error_message_str = str(last_exception)
+
+            if isinstance(last_exception, InstructionExecutionError):
+                error_instruction_dict = last_exception.instruction if isinstance(last_exception.instruction, dict) else {}
                 self._errors.append({
                     "type": "InstructionExecutionError", 
-                    "instruction_type": getattr(e, 'instruction', {}).get('type', str(action_type)),
-                    "selector": getattr(e, 'instruction', {}).get('selector', getattr(enhanced_instruction, 'selector', 'N/A')),
-                    "message": getattr(e, 'message', str(e))
+                    "instruction_type": error_instruction_dict.get('type', str(action_type)),
+                    "selector": error_instruction_dict.get('selector', getattr(enhanced_instruction, 'selector', 'N/A')),
+                    "message": last_exception.message
                 })
             else:
-                logger.error(f"GenericError during {action_type.value if hasattr(action_type, 'value') else str(action_type)} ({getattr(enhanced_instruction, 'selector', 'N/A')}): {str(e)}", exc_info=True)
                 self._errors.append({
-                    "type": "GenericError",
+                    "type": error_type_name,
                     "instruction_type": action_type.value if hasattr(action_type, 'value') else str(action_type),
-                    "message": str(e)
+                    "selector": getattr(enhanced_instruction, 'selector', 'N/A'),
+                    "message": error_message_str
                 })
-            
-            raise  # Re-raise for normal error handling
+            raise last_exception
 
     async def execute_instructions(self, instructions_json: Union[Dict, InstructionSet]) -> Dict:
         self._reset_execution_state()
@@ -1050,6 +1084,68 @@ class PlaywrightBrowserAgent:
 
 
 # Apply CAPTCHA integration methods to the WebBrowserAgent class
+    def _init_reasoning_engine(self):
+        """Initialize reasoning engine if enabled"""
+        if not hasattr(self, '_reasoning_engine') and reasoning_config.enabled:
+            try:
+                self._reasoning_engine = WebAutomationReasoner(
+                    browser_agent=self,
+                    memory_manager=self.memory_manager
+                )
+                logger.info("Reasoning engine initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize reasoning engine: {e}")
+                self._reasoning_engine = None
+        elif not reasoning_config.enabled:
+            self._reasoning_engine = None
+
+    async def execute_instructions_with_reasoning(self, instructions_json: Union[Dict, InstructionSet]) -> Dict:
+        """Enhanced instruction execution with optional CoT reasoning"""
+        self._init_reasoning_engine() # Ensure it's initialized if config changed
+        
+        # Convert to InstructionSet if needed
+        if isinstance(instructions_json, dict):
+            try:
+                instruction_set = InstructionSet(**instructions_json)
+            except ValidationError as e:
+                self._errors.append({"type": "ValidationError", "message": str(e)})
+                return self._prepare_result(success=False)
+        else:
+            instruction_set = instructions_json
+        
+        # Apply reasoning if enabled and available
+        reasoning_result = {}
+        if self._reasoning_engine and reasoning_config.enabled:
+            logger.info("Applying CoT reasoning to instruction set")
+            reasoning_result = await self._reasoning_engine.reason_about_instruction_set(instruction_set)
+            
+            if reasoning_result.get("reasoning_applied") and reasoning_result.get("result"):
+                logger.info(f"Reasoning completed in {reasoning_result.get('execution_time', 0):.2f}s")
+                # Potentially modify instruction_set based on reasoning_result['result']
+                # For now, we'll just log and proceed with original/modified instructions
+                # This part would need careful design on how reasoning output translates to executable actions
+            elif not reasoning_result.get("reasoning_applied"):
+                 logger.warning(f"Reasoning was not applied or failed: {reasoning_result.get('error', 'unknown')}")
+        
+        # Execute instructions using existing method
+        # This might use the original instruction_set or one modified by reasoning
+        execution_result = await self.execute_instructions(instruction_set)
+        
+        # Add reasoning info to result
+        if reasoning_result:
+            execution_result["reasoning"] = reasoning_result
+            if self._reasoning_engine:
+                execution_result["reasoning_stats"] = self._reasoning_engine.get_reasoning_stats()
+        
+        return execution_result
+
+    def get_reasoning_stats(self) -> Dict[str, Any]:
+        """Get reasoning engine statistics"""
+        if hasattr(self, '_reasoning_engine') and self._reasoning_engine:
+            return self._reasoning_engine.get_reasoning_stats()
+        return {"reasoning_enabled": reasoning_config.enabled, "status": "not_initialized_or_disabled"}
+
+
 PlaywrightBrowserAgent = CaptchaIntegration.add_captcha_methods(PlaywrightBrowserAgent)
 
 async def main():

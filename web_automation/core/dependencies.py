@@ -1,5 +1,9 @@
 from typing import Protocol, Optional, Dict, Any
 from dataclasses import dataclass
+import logging # Added import
+from pydantic import ValidationError # Added import
+
+logger = logging.getLogger(__name__) # Added logger instance
 
 class MemoryManagerProtocol(Protocol):
     def store_automation_pattern(self, pattern: str, success: bool, user_id: str, metadata: dict = None) -> None: ...
@@ -20,13 +24,47 @@ class DependencyFactory:
     @staticmethod
     def create_memory_manager(config: Optional[Dict] = None) -> Optional[MemoryManagerProtocol]:
         if not config or not config.get('enabled', True):
+            logger.debug("Memory manager explicitly disabled or no config provided.")
             return None
+        
         try:
             from web_automation.memory.memory_manager import Mem0BrowserAdapter
             from web_automation.config.config_models import Mem0AdapterConfig
-            mem0_config = Mem0AdapterConfig(**config) if isinstance(config, dict) else config
-            return Mem0BrowserAdapter(mem0_config=mem0_config)
-        except Exception:
+            
+            logger.debug(f"Attempting to create memory manager with raw config: {config}")
+            logger.debug(f"Config type: {type(config)}")
+            logger.debug(f"Config keys: {list(config.keys()) if isinstance(config, dict) else 'Not a dict'}")
+            
+            if isinstance(config, dict) and 'enabled' in config and len(config) == 1:
+                logger.error("Config only contains 'enabled' key - this often indicates a Pydantic serialization failure upstream. Aborting memory manager creation.")
+                return None
+            
+            # Ensure we are working with a Mem0AdapterConfig instance
+            # If config is already a Mem0AdapterConfig, use it directly.
+            # If it's a dict, try to parse it into Mem0AdapterConfig.
+            if isinstance(config, Mem0AdapterConfig):
+                mem0_adapter_instance_config = config
+                logger.debug("Provided config is already a Mem0AdapterConfig instance.")
+            elif isinstance(config, dict):
+                logger.debug("Provided config is a dict, attempting to parse into Mem0AdapterConfig.")
+                mem0_adapter_instance_config = Mem0AdapterConfig(**config)
+            else:
+                logger.error(f"Invalid config type for memory manager: {type(config)}. Expected Dict or Mem0AdapterConfig.")
+                return None
+
+            logger.info(f"Successfully prepared Mem0AdapterConfig: {mem0_adapter_instance_config.model_dump_json(indent=2)}")
+            return Mem0BrowserAdapter(mem0_config=mem0_adapter_instance_config)
+            
+        except ValidationError as e:
+            logger.error(f"Mem0AdapterConfig validation failed during memory manager creation: {e}")
+            for error in e.errors():
+                logger.error(f"  Field: {error['loc']}, Type: {error['type']}, Message: {error['msg']}")
+            return None
+        except ImportError as e:
+            logger.error(f"Import error during memory manager creation (Mem0BrowserAdapter or Mem0AdapterConfig not found?): {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error creating memory manager: {e}", exc_info=True)
             return None
 
 class BrowserAgentFactory:

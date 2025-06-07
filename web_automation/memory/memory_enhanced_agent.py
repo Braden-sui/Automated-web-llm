@@ -51,6 +51,14 @@ class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
             config_to_use = global_mem0_config
             logger.info("PersistentMemoryBrowserAgent: Using global default Mem0AdapterConfig")
 
+        # Ensure agent_id is set in the config to be used
+        if config_to_use and hasattr(self, 'identity_id'):
+            if config_to_use.agent_id is None:
+                config_to_use.agent_id = self.identity_id
+                logger.info(f"PersistentMemoryBrowserAgent: Set agent_id in Mem0AdapterConfig to {self.identity_id}")
+            elif config_to_use.agent_id != self.identity_id:
+                logger.warning(f"PersistentMemoryBrowserAgent: Mem0AdapterConfig already had agent_id '{config_to_use.agent_id}', not overriding with '{self.identity_id}'.")
+
         try:
             self.memory_manager = Mem0BrowserAdapter(mem0_config=config_to_use)
             collection_name = config_to_use.qdrant_collection_name if config_to_use else "default (Memory())"
@@ -97,7 +105,7 @@ class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
                 print(f"SUCCESS with selector: '{sel}'")
                 print(f"About to store pattern in memory...")
                 if self.memory_manager:
-                    self.memory_manager.store_automation_pattern(description=target_description, selector=sel, success=True, user_id=self.identity_id)
+                    self.memory_manager.store_automation_pattern(description=target_description, selector=sel, success=True, user_id=self.identity_id, fallback_selector=fallback_selector)
                     print(f"Pattern storage attempted")
                 return True
             except Exception as e:
@@ -108,10 +116,11 @@ class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
             # When all selectors fail, we might want to record this failure against the target_description.
             # Storing the fallback_selector as the 'failed' selector could be one approach, or None if no specific selector led to this final failure.
             self.memory_manager.store_automation_pattern(
-                description=target_description, 
-                selector=fallback_selector, # Or perhaps a generic 'NO_SELECTOR_WORKED' or the last attempted 'sel'
-                success=False, 
-                user_id=self.identity_id
+                user_id=self.identity_id,
+                description=target_description,
+                selector=fallback_selector, 
+                success=False,
+                fallback_selector=fallback_selector
             )
         print(f"=== SMART_SELECTOR_CLICK DEBUG END ===\n")
         return False
