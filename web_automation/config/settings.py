@@ -4,25 +4,9 @@ from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv
-import re # Add import for regular expressions
-from web_automation.config.config_models import Settings as PydanticSettings, ReasoningConfig # Alias to avoid naming conflict
+from web_automation.config.config_models import Settings as PydanticSettings # Alias to avoid naming conflict
 
 load_dotenv()  # Load environment variables from .env file
-
-def _get_int_env_var(var_name: str, default_value: str) -> int:
-    """Helper to get an integer environment variable, allowing for comments after #."""
-    value_str = os.getenv(var_name, default_value)
-    # Remove any comments starting with #
-    match = re.match(r"^(\d+)", value_str)
-    if match:
-        return int(match.group(1))
-    try:
-        # Fallback for simple integer strings without comments or if regex fails unexpectedly
-        return int(value_str)
-    except ValueError:
-        # If still not a valid int, use the default (which should be a valid int string)
-        print(f"Warning: Invalid value '{value_str}' for env var {var_name}. Using default '{default_value}'.")
-        return int(default_value)
 
 class AntiDetectionConfig:
     """Configuration for anti-detection measures"""
@@ -147,6 +131,8 @@ class SecurityConfig:
     ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "True").lower() == "true"
     REQUESTS_PER_MINUTE = int(os.getenv("REQUESTS_PER_MINUTE", "30"))
 
+# AWM (Agent Workflow Memory) has been removed in favor of Mem0 integration
+
 # Instantiate configs for easy import
 
 class CaptchaConfig(BaseModel):
@@ -179,13 +165,13 @@ external_captcha_service_config = ExternalCaptchaServiceConfig()
 browser_config = BrowserConfig()
 general_config = GeneralConfig()
 proxy_config = ProxyConfig()
-captcha_config = CaptchaConfig() # New local vision CAPTCHA config
+captcha_config = CaptchaConfig() # Local vision CAPTCHA config
 security_config = SecurityConfig()
 
-# Global Pydantic settings instance (includes Mem0AdapterConfig and ReasoningConfig)
-settings = PydanticSettings() 
-mem0_adapter_config = settings.mem0ai_config
-reasoning_config = settings.reasoning_config
+# Instantiate Pydantic-based settings
+# This will load .env variables for Pydantic models if not explicitly passed
+pydantic_settings = PydanticSettings()
+mem0_adapter_config = pydantic_settings.mem0ai_config
 
 # Ensure necessary directories exist
 for directory in [general_config.SCREENSHOTS_DIR, general_config.DOWNLOADS_DIR, general_config.LOGS_DIR]:
@@ -217,9 +203,9 @@ __all__ = [
     'browser_config',
     'general_config',
     'proxy_config',
-    'security_config',
     'captcha_config',
-    'settings', # The main Pydantic settings object
-    'mem0_adapter_config', # Specific Mem0 config for convenience
-    'reasoning_config' # Specific Reasoning config for convenience
+    'security_config',
+    'pydantic_settings',
+    'mem0_adapter_config',
+    'validate_config'
 ]

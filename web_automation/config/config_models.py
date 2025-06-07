@@ -73,26 +73,24 @@ class Mem0AdapterConfig(BaseModel):
     # model_name: Optional[str] = Field(None, description="Model to use for Mem0 AI.")
     # extra_params: Dict[str, Any] = Field({}, description="Any extra parameters for Mem0 initialization.")
 
-class ReasoningConfig(BaseModel):
-    """Configuration for LLM Reasoners integration"""
-    enabled: bool = Field(True, description="Enable CoT reasoning capabilities")
-    algorithm: str = Field("MCTS", description="Reasoning algorithm: MCTS, BFS, DFS, BeamSearch")
-    max_depth: int = Field(5, description="Maximum reasoning depth")
-    max_iterations: int = Field(10, description="Maximum MCTS iterations")
-    exploration_weight: float = Field(1.0, description="MCTS exploration vs exploitation")
-    reasoning_timeout: int = Field(30, description="Timeout for reasoning in seconds")
-    use_fast_reward: bool = Field(True, description="Use fast reward for MCTS rollouts")
-    reasoning_temperature: float = Field(0.1, description="Temperature for reasoning LLM calls")
-    log_reasoning_traces: bool = Field(True, description="Log detailed reasoning traces")
-    reasoning_model_override: Optional[str] = Field(None, description="Override model for reasoning")
-
+class VisualSystemConfig(BaseModel):
+    """
+    Visual system configuration.
+    By default, visual memory is disabled and auto-capture is off. Enable explicitly for image analysis or fallback.
+    """
+    enabled: bool = Field(False, description="Enable or disable visual pattern recognition features.")
+    auto_capture: bool = Field(False, description="Automatically capture and store screenshots during automation. Default False.")
+    model_name: str = Field("qwen2.5vl:7b", description="The Ollama vision model name to use (e.g., 'qwen2.5vl:7b', 'llava').")
+    ollama_base_url: Optional[str] = Field(None, description="Optional base URL for the Ollama server if not running on default localhost:11434.")
+    # Future: Add confidence thresholds, etc.
 
 class Settings(BaseModel):
     browser_config: BrowserConfig = Field(default_factory=BrowserConfig)
     proxy_config: ProxyConfig = Field(default_factory=ProxyConfig)
     anti_detection_config: AntiDetectionConfig = Field(default_factory=AntiDetectionConfig)
     general_config: GeneralConfig = Field(default_factory=GeneralConfig)
-    mem0ai_config: Mem0AdapterConfig = Field(default_factory=Mem0AdapterConfig) # New config
+    mem0ai_config: Mem0AdapterConfig = Field(default_factory=Mem0AdapterConfig)
+    visual_system_config: VisualSystemConfig = Field(default_factory=VisualSystemConfig) # Added visual config
 
 # Example of how settings might be loaded (e.g., in a main config file or __init__.py)
 # settings = Settings()

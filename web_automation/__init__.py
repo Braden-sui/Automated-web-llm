@@ -6,7 +6,6 @@ from .config.settings import (
     browser_config,
     general_config,
     captcha_config,
-    awm_config,
 )
 
 __all__ = [
@@ -17,5 +16,4 @@ __all__ = [
     "browser_config",
     "general_config",
     "captcha_config",
-    "awm_config",
 ]

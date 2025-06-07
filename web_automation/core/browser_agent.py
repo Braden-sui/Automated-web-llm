@@ -10,6 +10,7 @@ import re
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Callable
+from web_automation.vision.image_analyzer import ImageAnalyzer
 from urllib.parse import urlparse
 
 from playwright.async_api import (
@@ -28,10 +29,8 @@ from web_automation.captcha.captcha_handler import VisionCaptchaHandler
 from pydantic import ValidationError
 # Import moved to factory.py to avoid circular imports
 from ..memory.memory_manager import Mem0BrowserAdapter
-
 from ..config import settings
-from ..config.settings import mem0_adapter_config, reasoning_config # Import the specific config
-from ..reasoning.reasoning_engine import WebAutomationReasoner
+from ..config.settings import mem0_adapter_config  # Import the specific config
 from ..models.instructions import (
     InstructionSet,
     BrowserInstruction,
@@ -78,67 +77,51 @@ class InstructionExecutionError(BrowserAgentError):
 class PlaywrightBrowserAgent:
     """
     A browser automation agent that executes JSON-based instructions using Playwright.
+    Provides explicit image analysis API (analyze_image, analyze_current_page_visually, compare_images) via lazy-loaded ImageAnalyzer.
     """
     
-    def __init__(self, dependencies: Optional['BrowserAgentDependencies'] = None, **kwargs):
-        # Handle both new DI pattern and legacy pattern
-        if dependencies is not None:
-            # New DI pattern
-            self.deps = dependencies
-            self.identity_id = dependencies.config.get('identity_id', 'default')
-            self.memory_manager = dependencies.memory_manager
-            
-            # Extract config
-            config = dependencies.config
-            self.browser_type = config.get('browser_type', 'chromium')
-            self.headless = config.get('headless', True)
-            self.stealth = config.get('stealth', True)
-            self.default_timeout = config.get('default_timeout', 30000)
-            self.viewport = config.get('viewport', {"width": 1920, "height": 1080})
-            self.user_agent = config.get('user_agent')
-            self.proxy = config.get('proxy')
-            self.downloads_path = config.get('downloads_path', 'downloads')
-            self.randomize_fingerprint = config.get('randomize_fingerprint', True)
-            self.custom_fingerprint_script = config.get('custom_fingerprint_script')
-            self.memory_enabled = self.memory_manager is not None
-        else:
-            # Legacy pattern - keep all existing logic exactly as is
-            self.identity_id = kwargs.get('identity_id') or str(uuid.uuid4())
-            self.browser_type = (kwargs.get('browser_type') or settings.browser_config.DEFAULT_BROWSER_TYPE).lower()
-            self.headless = kwargs.get('headless', settings.browser_config.DEFAULT_HEADLESS_MODE)
-            self.stealth = kwargs.get('stealth', True)
-            self.default_timeout = kwargs.get('default_timeout') or settings.general_config.DEFAULT_TIMEOUT
-            self.viewport = kwargs.get('viewport') or {"width": settings.browser_config.DEFAULT_VIEWPORT_WIDTH, "height": settings.browser_config.DEFAULT_VIEWPORT_HEIGHT}
-            self.user_agent = kwargs.get('user_agent')
-            
-            proxy = kwargs.get('proxy')
-            if proxy is not None:
-                self.proxy = proxy
-            elif settings.proxy_config.USE_PROXY and settings.proxy_config.PROXY_SERVER:
-                self.proxy = {"server": settings.proxy_config.PROXY_SERVER}
-                if settings.proxy_config.PROXY_USERNAME and settings.proxy_config.PROXY_PASSWORD:
-                    self.proxy["username"] = settings.proxy_config.PROXY_USERNAME
-                    self.proxy["password"] = settings.proxy_config.PROXY_PASSWORD
-            else:
-                self.proxy = None
-                
-            self.downloads_path = kwargs.get('downloads_path') or settings.general_config.DOWNLOADS_DIR
-            os.makedirs(self.downloads_path, exist_ok=True)
-            
-            self.randomize_fingerprint = kwargs.get('randomize_fingerprint', self.stealth)
-            self.custom_fingerprint_script = kwargs.get('custom_fingerprint_script')
-            self.memory_enabled = kwargs.get('memory_enabled', True)
-            
-            # Initialize memory manager the old way
-            self.memory_manager: Optional[Mem0BrowserAdapter] = None
-            if self.memory_enabled:
-                try:
-                    self.memory_manager = Mem0BrowserAdapter(mem0_config=mem0_adapter_config)
-                except Exception as e:
-                    logger.error(f"Failed to initialize Mem0BrowserAdapter: {e}")
-                    self.memory_manager = None
+    def __init__(self, dependencies: 'BrowserAgentDependencies', **kwargs):
+        """Initialize the browser agent with required dependencies.
         
-        # Common initialization for both patterns
+        Args:
+            dependencies: BrowserAgentDependencies instance containing required services
+            **kwargs: Additional configuration overrides (will override config from dependencies)
+        """
+        self.deps = dependencies
+        
+        # Get config from dependencies
+        config = dependencies.config
+        
+        # Set attributes from config, with overrides from kwargs
+        self.identity_id = kwargs.get('identity_id') or config.get('identity_id', 'default')
+        self.browser_type = (kwargs.get('browser_type') or config.get('browser_type', 'chromium')).lower()
+        self.headless = kwargs.get('headless', config.get('headless', True))
+        self.stealth = kwargs.get('stealth', config.get('stealth', True))
+        self.default_timeout = kwargs.get('default_timeout', config.get('default_timeout', 30000))
+        
+        # Viewport handling
+        default_viewport = {"width": 1920, "height": 1080}
+        self.viewport = kwargs.get('viewport') or config.get('viewport', default_viewport)
+        
+        # User agent and proxy
+        self.user_agent = kwargs.get('user_agent') or config.get('user_agent')
+        self.proxy = kwargs.get('proxy') or config.get('proxy')
+        
+        # Paths and directories
+        self.downloads_path = kwargs.get('downloads_path') or config.get('downloads_path', 'downloads')
+        os.makedirs(self.downloads_path, exist_ok=True)
+        
+        # Fingerprint settings
+        self.randomize_fingerprint = kwargs.get('randomize_fingerprint', 
+                                              config.get('randomize_fingerprint', self.stealth))
+        self.custom_fingerprint_script = kwargs.get('custom_fingerprint_script') or \
+                                       config.get('custom_fingerprint_script')
+        
+        # Memory management
+        self.memory_manager = dependencies.memory_manager
+        self.memory_enabled = self.memory_manager is not None
+        
+        # Initialize browser state
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
@@ -147,7 +130,25 @@ class PlaywrightBrowserAgent:
         
         self._reset_execution_state()
         self._fingerprint_profile = self._load_or_create_profile()
-        self._init_reasoning_engine() # Initialize reasoning engine
+
+    # --- Explicit Image Analysis API ---
+    async def analyze_image(self, image_data: Union[bytes, str], prompt: str = "Describe what you see in this image") -> str:
+        """Explicit image analysis always available via lazy-loaded ImageAnalyzer."""
+        if not hasattr(self, '_image_analyzer') or self._image_analyzer is None:
+            self._image_analyzer = ImageAnalyzer()
+        return await self._image_analyzer.analyze_image(image_data, prompt)
+
+    async def analyze_current_page_visually(self, prompt: str = "Analyze this webpage") -> str:
+        """Explicit visual analysis of current page via screenshot."""
+        screenshot = await self._page.screenshot(type='png', full_page=True)
+        return await self.analyze_image(screenshot, prompt)
+
+    async def compare_images(self, image1: Union[bytes, str], image2: Union[bytes, str], comparison_prompt: str = None) -> str:
+        """Compare two images for similarities/differences."""
+        prompt = comparison_prompt or "Compare these two images and describe the differences"
+        if not hasattr(self, '_image_analyzer') or self._image_analyzer is None:
+            self._image_analyzer = ImageAnalyzer()
+        return await self._image_analyzer.compare_images(image1, image2, prompt)
 
     def _reset_execution_state(self):
         self._screenshots = []
@@ -1084,68 +1085,6 @@ class PlaywrightBrowserAgent:
 
 
 # Apply CAPTCHA integration methods to the WebBrowserAgent class
-    def _init_reasoning_engine(self):
-        """Initialize reasoning engine if enabled"""
-        if not hasattr(self, '_reasoning_engine') and reasoning_config.enabled:
-            try:
-                self._reasoning_engine = WebAutomationReasoner(
-                    browser_agent=self,
-                    memory_manager=self.memory_manager
-                )
-                logger.info("Reasoning engine initialized successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize reasoning engine: {e}")
-                self._reasoning_engine = None
-        elif not reasoning_config.enabled:
-            self._reasoning_engine = None
-
-    async def execute_instructions_with_reasoning(self, instructions_json: Union[Dict, InstructionSet]) -> Dict:
-        """Enhanced instruction execution with optional CoT reasoning"""
-        self._init_reasoning_engine() # Ensure it's initialized if config changed
-        
-        # Convert to InstructionSet if needed
-        if isinstance(instructions_json, dict):
-            try:
-                instruction_set = InstructionSet(**instructions_json)
-            except ValidationError as e:
-                self._errors.append({"type": "ValidationError", "message": str(e)})
-                return self._prepare_result(success=False)
-        else:
-            instruction_set = instructions_json
-        
-        # Apply reasoning if enabled and available
-        reasoning_result = {}
-        if self._reasoning_engine and reasoning_config.enabled:
-            logger.info("Applying CoT reasoning to instruction set")
-            reasoning_result = await self._reasoning_engine.reason_about_instruction_set(instruction_set)
-            
-            if reasoning_result.get("reasoning_applied") and reasoning_result.get("result"):
-                logger.info(f"Reasoning completed in {reasoning_result.get('execution_time', 0):.2f}s")
-                # Potentially modify instruction_set based on reasoning_result['result']
-                # For now, we'll just log and proceed with original/modified instructions
-                # This part would need careful design on how reasoning output translates to executable actions
-            elif not reasoning_result.get("reasoning_applied"):
-                 logger.warning(f"Reasoning was not applied or failed: {reasoning_result.get('error', 'unknown')}")
-        
-        # Execute instructions using existing method
-        # This might use the original instruction_set or one modified by reasoning
-        execution_result = await self.execute_instructions(instruction_set)
-        
-        # Add reasoning info to result
-        if reasoning_result:
-            execution_result["reasoning"] = reasoning_result
-            if self._reasoning_engine:
-                execution_result["reasoning_stats"] = self._reasoning_engine.get_reasoning_stats()
-        
-        return execution_result
-
-    def get_reasoning_stats(self) -> Dict[str, Any]:
-        """Get reasoning engine statistics"""
-        if hasattr(self, '_reasoning_engine') and self._reasoning_engine:
-            return self._reasoning_engine.get_reasoning_stats()
-        return {"reasoning_enabled": reasoning_config.enabled, "status": "not_initialized_or_disabled"}
-
-
 PlaywrightBrowserAgent = CaptchaIntegration.add_captcha_methods(PlaywrightBrowserAgent)
 
 async def main():

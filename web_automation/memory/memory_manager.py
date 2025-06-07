@@ -23,11 +23,13 @@ class Mem0BrowserAdapter:
         Args:
             mem0_config: Configuration object for Mem0 AI.
         """
+        print(f"--- Mem0Adapter: __init__ ENTERING. Received mem0_config type: {type(mem0_config)}")
         self.memory = None
         final_mem0_init_config = {}
         if mem0_config: # If a specific config is provided
             self.mem0_config = mem0_config
             logger.info(f"Mem0BrowserAdapter initialized with provided Mem0AdapterConfig: {mem0_config.model_dump_json(indent=2)}")
+            print(f"--- Mem0Adapter: Processing provided mem0_config.")
 
             # Build up the Mem0 configuration dictionary with defaults and overrides
             final_mem0_init_config = {}
@@ -54,6 +56,7 @@ class Mem0BrowserAdapter:
                 "provider": "qdrant",
                 "config": qdrant_config
             }
+            print(f"--- Mem0Adapter: Built vector_store config: {final_mem0_init_config['vector_store']}")
 
             # Embedder Configuration (HuggingFace/sentence-transformers)
             # Assuming we always want to use the local sentence-transformer for tests if memory is enabled
@@ -64,6 +67,7 @@ class Mem0BrowserAdapter:
                 }
             }
             logger.info(f"Mem0BrowserAdapter: Configuring embedder: {final_mem0_init_config['embedder']}")
+            print(f"--- Mem0Adapter: Built embedder config: {final_mem0_init_config['embedder']}")
 
             # LLM Configuration
             llm_config_data = {
@@ -95,6 +99,7 @@ class Mem0BrowserAdapter:
                 "config": llm_config_data
             }
             logger.info(f"Mem0BrowserAdapter: Final LLM config: {final_mem0_init_config['llm']}")
+            print(f"--- Mem0Adapter: Built LLM config: {final_mem0_init_config['llm']}")
 
             # Agent ID Configuration
             if self.mem0_config.agent_id:
@@ -107,22 +112,29 @@ class Mem0BrowserAdapter:
 
         else: # No mem0_config provided, attempt default initialization
             logger.warning("Mem0BrowserAdapter: No Mem0AdapterConfig provided. Attempting default Mem0 initialization.")
+            print("--- Mem0Adapter: No mem0_config provided, will attempt default Mem0 init.")
             # Default init might fail if OPENAI_API_KEY is not set, or use a default local setup if Mem0 supports it.
 
         # Force garbage collection to help release any file handles
         import gc
         gc.collect()
+        print("--- Mem0BrowserAdapter: Garbage collection completed.")
         
         # Try to initialize with retries and cleanup
+        print(f"--- Mem0Adapter: Entering Mem0 instantiation loop. final_mem0_init_config IS_SET: {bool(final_mem0_init_config)}")
         for attempt in range(3):
             try:
                 if final_mem0_init_config:
                     logger.info(f"Attempting to initialize Mem0 with config: {final_mem0_init_config}")
+                    print(f"--- Mem0Adapter: Attempt {attempt + 1}: Calling Memory.from_config with: {final_mem0_init_config}")
                     self.memory = Memory.from_config(final_mem0_init_config)
                     logger.info(f"Mem0 Memory initialized with custom config on attempt {attempt + 1}")
+                    print(f"--- Mem0Adapter: Attempt {attempt + 1}: Memory.from_config SUCCESSFUL.")
                 else:
+                    print(f"--- Mem0Adapter: Attempt {attempt + 1}: Calling Memory() (default config).")
                     self.memory = Memory()
                     logger.info(f"Mem0 Memory initialized with default config (no custom config provided) on attempt {attempt + 1}.")
+                    print(f"--- Mem0Adapter: Attempt {attempt + 1}: Memory() SUCCESSFUL.")
                 
                 if self.memory and mem0_config:
                     if mem0_config.qdrant_on_disk and mem0_config.qdrant_path:
@@ -132,6 +144,9 @@ class Mem0BrowserAdapter:
                 break  # Success, exit loop
             except Exception as e:
                 logger.warning(f"Mem0 initialization attempt {attempt + 1} failed: {e}")
+                print(f"--- Mem0Adapter: Attempt {attempt + 1}: EXCEPTION during Mem0 init: {e}")
+                import traceback
+                traceback.print_exc() # Print full traceback to console
                 if "WinError 32" in str(e) or "database is locked" in str(e).lower():
                     configured_qdrant_path_for_cleanup = None
                     if mem0_config and mem0_config.qdrant_path and mem0_config.qdrant_on_disk:
@@ -142,7 +157,9 @@ class Mem0BrowserAdapter:
                 if attempt == 2:  # Last attempt
                     logger.error(f"Failed to initialize Mem0 Memory after 3 attempts: {e}")
                     self.memory = None # Ensure memory is None if all attempts fail
+                    print(f"--- Mem0Adapter: Failed to init Mem0 after 3 attempts. self.memory is None.")
                     break # Exit loop
+        print(f"--- Mem0BrowserAdapter: __init__ COMPLETED successfully.")
 
     def _handle_database_lock(self, configured_qdrant_path: Optional[Path] = None):
         """
@@ -341,6 +358,87 @@ class Mem0BrowserAdapter:
             metadata_filter={"type": "automation_pattern"}
         )
         print(f"MEM0_SEARCH_RESULTS for automation_patterns (query='{pattern_query}', filter={{'type': 'automation_pattern'}}): {results}") # DEBUG PRINT
+        return results
+
+    def store_visual_pattern(
+        self,
+        user_id: str,
+        description: str, # e.g., 'Visual context for login_page_loaded'
+        visual_data: dict, # Contains screenshot_description, visual_landmarks, layout_type, action_type
+        metadata: Optional[dict] = None
+    ):
+        """
+        Stores a visual pattern including screenshot description and other visual metadata.
+
+        Args:
+            user_id: The ID of the user or agent.
+            description: A general description of this visual pattern.
+            visual_data: A dictionary containing detailed visual information:
+                - screenshot_description: LLM-generated text describing the screenshot.
+                - visual_landmarks: List of identified landmarks.
+                - layout_type: Classified layout type.
+                - action_type: The action associated with this visual context.
+            metadata: Optional additional metadata to store.
+        """
+        if not self.memory:
+            logger.warning("Memory not initialized. Cannot store visual pattern.")
+            return
+
+        # The primary text for semantic search is the LLM-generated screenshot description.
+        pattern_text = visual_data.get("screenshot_description", "No visual description provided.")
+        if pattern_text == "No visual description provided.":
+            logger.warning(f"Storing visual pattern for {user_id} with no screenshot_description.")
+
+        metadata_to_store = {
+            "type": "visual_pattern",
+            "original_description": description, # The description passed to this method
+            "timestamp": datetime.now(pytz.utc).isoformat(),
+            "source": "visual_memory_system",
+        }
+        # Add all fields from visual_data to metadata
+        metadata_to_store.update(visual_data)
+
+        if metadata:  # Merge any additional provided metadata
+            metadata_to_store.update(metadata)
+
+        try:
+            add_result = self.memory.add(
+                pattern_text,
+                user_id=user_id,
+                agent_id=self.mem0_config.agent_id if self.mem0_config else None,
+                metadata=metadata_to_store,
+                infer=False # Store raw text, LLM description is already processed
+            )
+            if add_result and isinstance(add_result, dict) and add_result.get("results"):
+                logger.info(f"Successfully stored visual pattern for {user_id}. Mem0 Response: {add_result}")
+            elif add_result:
+                logger.info(f"Visual pattern storage attempted for {user_id}. Mem0 Response: {add_result}")
+            else:
+                logger.warning(f"Visual pattern storage for {user_id} resulted in no explicit confirmation from Mem0. Pattern: '{pattern_text[:100]}...'" )
+            print(f"MEM0_ADD_RESULT for visual_pattern: {add_result}") # DEBUG PRINT
+
+        except Exception as e:
+            logger.error(f"Error storing visual pattern for {user_id}: {e}. Pattern: '{pattern_text[:100]}...'" )
+
+    def search_visual_patterns(self, query_description: str, user_id: str, limit: int = 5):
+        """
+        Searches for visual patterns based on a query description.
+
+        Args:
+            query_description: Textual description to search for (e.g., current screenshot's description).
+            user_id: The ID of the user or agent.
+            limit: Maximum number of patterns to return.
+
+        Returns:
+            A list of matching visual patterns.
+        """
+        results = self.search_memory(
+            query=query_description,
+            user_id=user_id,
+            limit=limit,
+            metadata_filter={"type": "visual_pattern"}
+        )
+        print(f"MEM0_SEARCH_RESULTS for visual_patterns (query='{query_description[:50]}...', filter={{'type': 'visual_pattern'}}): {results}") # DEBUG PRINT
         return results
 
     async def search_session_context(self, user_id: str, query: str, limit: int = 5):

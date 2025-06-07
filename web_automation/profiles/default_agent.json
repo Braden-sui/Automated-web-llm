@@ -1,0 +1,17 @@
+{
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "platform": "Win32",
+    "languages": [
+        "en-US",
+        "en"
+    ],
+    "timezone": "America/New_York",
+    "viewport": {
+        "width": 1920,
+        "height": 1080
+    },
+    "webgl": {
+        "vendor": "Google Inc. (NVIDIA)",
+        "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    }
+}

@@ -1,12 +1,7 @@
 from typing import Optional, Dict
 from .dependencies import BrowserAgentFactory
 
-def create_playwright_agent(memory_enabled: bool = False, reasoning_enabled: bool = None, memory_config: Optional[Dict] = None, **kwargs):
-    # Handle reasoning configuration
-    if reasoning_enabled is not None:
-        from ..config.settings import reasoning_config
-        reasoning_config.enabled = reasoning_enabled
-    
+def create_playwright_agent(memory_enabled: bool = False, memory_config: Optional[Dict] = None, **kwargs):
     if memory_enabled:
         final_memory_config = {'enabled': True}
         if memory_config:

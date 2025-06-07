@@ -2,136 +2,224 @@ import logging
 import re
 import asyncio
 import random
-from typing import Optional
+import base64 # Added for screenshot encoding
+from typing import Optional, Union
+
+from ..models.instructions import NavigateInstruction, ClickInstruction, TypeInstruction
 
 from ..core.browser_agent import PlaywrightBrowserAgent, BrowserAgentError
 from .memory_manager import Mem0BrowserAdapter
 from ..config.config_models import Mem0AdapterConfig
+from ..vision.visual_memory_system import VisualMemorySystem
+from web_automation.vision.image_analyzer import ImageAnalyzer
 
 logger = logging.getLogger(__name__)
 
 class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
-    """PlaywrightBrowserAgent with additional helpers that utilise the Mem0BrowserAdapter."""
+    """
+    PlaywrightBrowserAgent with enhanced memory and explicit visual analysis capabilities.
+    Visual memory (auto-capture) is disabled by default and only enabled if both enabled and auto_capture are True.
+    Explicit image analysis is always available if the visual system is configured.
+    """
 
-    def __init__(self, dependencies=None, mem0_config: Optional[Mem0AdapterConfig] = None, **kwargs):
-        # Handle both new DI pattern and legacy pattern
-        if dependencies is not None:
-            # New DI pattern - memory_manager is already created by BrowserAgentFactory
-            super().__init__(dependencies=dependencies)
-            # In this case, self.memory_manager and self.memory_enabled were already set by PlaywrightBrowserAgent.__init__
-            # Just log that we're using the DI pattern
-            logger.info("PersistentMemoryBrowserAgent: Initialized using dependency injection pattern")
-            return
-            
-        # Legacy pattern - the recent fix for memory initialization
-        # Tell the parent class NOT to initialize memory, as we will handle it
-        kwargs_for_super = kwargs.copy()
-        kwargs_for_super["memory_enabled"] = False
-        super().__init__(**kwargs_for_super)
+    def __init__(self, dependencies, **kwargs):
+        super().__init__(dependencies=dependencies, **kwargs)
+        logger.info("PersistentMemoryBrowserAgent attempting initialization.")
 
-        # Now, this agent is responsible for memory
-        self.memory_enabled = True
-
-        # Get the appropriate memory config
-        config_to_use = mem0_config
-        memory_config_dict = kwargs.get('memory_config')
-        
-        # If memory_config was passed as a dict (from create_playwright_agent)
-        if memory_config_dict and not config_to_use:
-            from ..config.config_models import Mem0AdapterConfig
-            try:
-                config_to_use = Mem0AdapterConfig(**memory_config_dict)
-                logger.info("PersistentMemoryBrowserAgent: Created Mem0AdapterConfig from memory_config dict")
-            except Exception as e:
-                logger.error(f"PersistentMemoryBrowserAgent: Failed to create Mem0AdapterConfig from dict: {e}")
-        
-        # If no config was provided anywhere, use the global default
-        if config_to_use is None:
-            from ..config.settings import mem0_adapter_config as global_mem0_config
-            config_to_use = global_mem0_config
-            logger.info("PersistentMemoryBrowserAgent: Using global default Mem0AdapterConfig")
-
-        # Ensure agent_id is set in the config to be used
-        if config_to_use and hasattr(self, 'identity_id'):
-            if config_to_use.agent_id is None:
-                config_to_use.agent_id = self.identity_id
-                logger.info(f"PersistentMemoryBrowserAgent: Set agent_id in Mem0AdapterConfig to {self.identity_id}")
-            elif config_to_use.agent_id != self.identity_id:
-                logger.warning(f"PersistentMemoryBrowserAgent: Mem0AdapterConfig already had agent_id '{config_to_use.agent_id}', not overriding with '{self.identity_id}'.")
-
-        try:
-            self.memory_manager = Mem0BrowserAdapter(mem0_config=config_to_use)
-            collection_name = config_to_use.qdrant_collection_name if config_to_use else "default (Memory())"
-            logger.info(f"PersistentMemoryBrowserAgent: Mem0BrowserAdapter initialized. Collection: {collection_name}")
-        except Exception as e:
-            logger.error(f"PersistentMemoryBrowserAgent: Failed to initialize Mem0BrowserAdapter: {e}")
-            self.memory_manager = None
-            self.memory_enabled = False  # Memory initialization failed
-
-    async def smart_selector_click(self, target_description: str, fallback_selector: str, timeout: int = 5000) -> bool:
-        """Attempt click using selectors learned from memory before falling back."""
-        print(f"\n=== SMART_SELECTOR_CLICK DEBUG START ===")
-        print(f"Target: '{target_description}'")
-        print(f"Fallback: '{fallback_selector}'")
-        print(f"Memory manager available: {self.memory_manager is not None}")
-        selectors_to_try = []
-
-        if self.memory_manager:
-            results = self.memory_manager.search_automation_patterns(
-                pattern_query=target_description,
-                user_id=self.identity_id,
-                limit=3,
-            )
-            for res in results:
-                retrieved_selector = res.get("metadata", {}).get("selector")
-                if retrieved_selector:
-                    selectors_to_try.append(retrieved_selector)
-
-        if self.memory_manager:
-            print(f"Memory search completed. Found {len(results)} results:")
-            for i, res in enumerate(results):
-                print(f"  Result {i}: memory='{res.get('memory', '')}', metadata='{res.get('metadata', {})}'")
+        self.memory_manager = getattr(dependencies, 'memory_manager', None)
+        self.memory_enabled = self.memory_manager is not None
+        if self.memory_enabled:
+            logger.info(f"Memory manager configured: {self.memory_manager.__class__.__name__}")
         else:
-            print("No memory manager - skipping memory search")
-        selectors_to_try.append(fallback_selector)
-        print(f"Selectors to try: {selectors_to_try}")
+            logger.warning("No memory manager provided. Memory features disabled.")
 
-        for sel in selectors_to_try:
-            print(f"Trying selector: '{sel}'")
+        self.visual_system: Optional[VisualMemorySystem] = None
+        self.visual_system_enabled: bool = False
+        self.visual_auto_capture: bool = False
+        ollama_client = getattr(dependencies, 'ollama_client', None)
+        visual_llm_model_name = getattr(dependencies, 'visual_llm_model_name', None)
+
+        # VisualSystemConfig is always passed as dict or model; check for enabled/auto_capture
+        visual_config = kwargs.get('visual_config_input') or getattr(dependencies, 'visual_config', None)
+        print(f"DEBUG: visual_config received in PersistentMemoryBrowserAgent: {visual_config}")
+        # Defensive: ensure dict
+        if hasattr(visual_config, 'model_dump'):
+            visual_config = visual_config.model_dump()
+        print(f"DEBUG: visual_config after model_dump: {visual_config}")
+        if not visual_config:
+            visual_config = {'enabled': False, 'auto_capture': False}
+        enabled = bool(visual_config.get('enabled', False))
+        auto_capture = bool(visual_config.get('auto_capture', False))
+        print(f"DEBUG: enabled: {enabled}, auto_capture: {auto_capture}")
+        self.visual_auto_capture = enabled and auto_capture
+
+        if enabled and ollama_client and visual_llm_model_name and self.memory_manager:
             try:
-                element = await self._get_element(sel, timeout)
-                await asyncio.sleep(random.uniform(0.1, 0.3)) # Human-like delay before click
-                await element.click()
-                print(f"SUCCESS with selector: '{sel}'")
-                print(f"About to store pattern in memory...")
-                if self.memory_manager:
-                    self.memory_manager.store_automation_pattern(description=target_description, selector=sel, success=True, user_id=self.identity_id, fallback_selector=fallback_selector)
-                    print(f"Pattern storage attempted")
-                return True
+                self.visual_system = VisualMemorySystem(
+                    llm_client=ollama_client,
+                    memory_manager=self.memory_manager,
+                    llm_model_name=visual_llm_model_name
+                )
+                self.visual_system_enabled = True
+                logger.info(f"VisualMemorySystem initialized with model '{visual_llm_model_name}'. Visual fallback/analysis enabled.")
             except Exception as e:
-                logger.debug(f"Selector {sel} failed: {e}")
-                continue
+                logger.error(f"Failed to initialize VisualMemorySystem: {e}. Visual features disabled.")
+                self.visual_system = None
+                self.visual_system_enabled = False
+        else:
+            logger.info("VisualMemorySystem not initialized (disabled or missing dependencies). Visual fallback/analysis disabled.")
 
-        if self.memory_manager:
-            # When all selectors fail, we might want to record this failure against the target_description.
-            # Storing the fallback_selector as the 'failed' selector could be one approach, or None if no specific selector led to this final failure.
-            self.memory_manager.store_automation_pattern(
-                user_id=self.identity_id,
-                description=target_description,
-                selector=fallback_selector, 
-                success=False,
-                fallback_selector=fallback_selector
-            )
-        print(f"=== SMART_SELECTOR_CLICK DEBUG END ===\n")
-        return False
+    async def _capture_visuals_if_enabled(self, action_type: str, target_selector: Optional[str] = None):
+        if not self.visual_system_enabled or not self.visual_system or not self.visual_auto_capture:
+            return
+        try:
+            if self._page and not self._page.is_closed():
+                current_url = self._page.url
+                logger.debug(f"Capturing visual context for action: {action_type} at URL: {current_url}")
+                await self.visual_system.capture_visual_context(
+                    page=self._page,
+                    user_id=self.identity_id,
+                    action_type=action_type,
+                    target_element_selector=target_selector,
+                    current_url=current_url
+                )
+            else:
+                logger.warning("Page not available or closed, skipping visual context capture.")
+        except Exception as e:
+            logger.error(f"Error during visual context capture for {action_type}: {e}", exc_info=True)
+
+    async def navigate(self, url: str, **kwargs) -> None:
+        nav_instruction = NavigateInstruction(url=url, **kwargs)
+        await super()._handle_navigate(nav_instruction)
+        await self._capture_visuals_if_enabled(action_type="navigate_complete", target_selector=url)
+
+    async def click(self, selector: str, **kwargs) -> None:
+        click_instruction = ClickInstruction(selector=selector, **kwargs)
+        await super()._handle_click(click_instruction)
+        await self._capture_visuals_if_enabled(action_type="click_complete", target_selector=selector)
+
+
+    async def fill(self, selector: str, value: str, **kwargs) -> None:
+        type_instruction = TypeInstruction(selector=selector, text=value, **kwargs)
+        await super()._handle_type(type_instruction)
+        await self._capture_visuals_if_enabled(action_type="fill_complete", target_selector=selector)
+
+    async def smart_selector_click(self, target_description: str, fallback_selector: Optional[str] = None, timeout: Optional[int] = None) -> bool:
+        logger.info(f"Attempting smart_selector_click for: '{target_description}' with fallback: '{fallback_selector}'")
+        
+        # Attempt standard click methods first
+        success = False
+        reason_or_selector_used = ""
+        page_url = self._page.url if self._page and not self._page.is_closed() else "unknown_url"
+
+        primary_selector_to_try = target_description # Assuming target_description can be a selector or smart string
+        
+        try:
+            logger.info(f"Attempting smart_selector_click with primary selector/description: '{primary_selector_to_try}' at URL: {page_url}")
+            await self.click(primary_selector_to_try, timeout=timeout) # Calls PersistentMemoryBrowserAgent.click
+            success = True
+            reason_or_selector_used = primary_selector_to_try
+            logger.info(f"smart_selector_click: Primary click attempt SUCCEEDED with '{primary_selector_to_try}'.")
+        except Exception as e_primary:
+            logger.warning(f"smart_selector_click: Primary click attempt with '{primary_selector_to_try}' FAILED: {e_primary}")
+            if fallback_selector:
+                logger.info(f"Attempting smart_selector_click with fallback selector: '{fallback_selector}' at URL: {page_url}")
+                try:
+                    await self.click(fallback_selector, timeout=timeout)
+                    success = True
+                    reason_or_selector_used = fallback_selector
+                    logger.info(f"smart_selector_click: Fallback click attempt SUCCEEDED with '{fallback_selector}'.")
+                except Exception as e_fallback:
+                    logger.warning(f"smart_selector_click: Fallback click attempt with '{fallback_selector}' also FAILED: {e_fallback}")
+                    reason_or_selector_used = f"Primary click failed: {type(e_primary).__name__} - {str(e_primary)}. Fallback click failed: {type(e_fallback).__name__} - {str(e_fallback)}."
+                    # success remains False
+            else:
+                reason_or_selector_used = f"Primary click failed: {type(e_primary).__name__} - {str(e_primary)}. No fallback selector provided."
+                # success remains False
+
+
+        if success:
+            logger.info(f"smart_selector_click SUCCEEDED for '{target_description}' using: {reason_or_selector_used}")
+            if self.memory_manager:
+                self.memory_manager.store_automation_pattern(
+                    user_id=self.identity_id,
+                    action_type="smart_selector_click",
+                    target_description=target_description,
+                    selector_used=reason_or_selector_used,
+                    status="success",
+                    original_fallback_selector=fallback_selector,
+                    url=page_url
+                )
+            await self._capture_visuals_if_enabled(action_type="smart_selector_click_success", target_selector=reason_or_selector_used)
+            return True
+        else:
+            # Standard selectors failed, log this failure
+            logger.warning(f"smart_selector_click FAILED for '{target_description}' using standard selectors. Reason: {reason_or_selector_used}")
+            if self.memory_manager:
+                self.memory_manager.store_automation_pattern(
+                    user_id=self.identity_id,
+                    action_type="smart_selector_click",
+                    target_description=target_description,
+                    selector_used=fallback_selector or "N/A", # Log against fallback or N/A
+                    status="failure_selectors",
+                    failure_reason=reason_or_selector_used,
+                    original_fallback_selector=fallback_selector,
+                    url=page_url
+                )
+            
+            # Attempt visual fallback if enabled and page is available
+            if self.visual_system_enabled and self.visual_system and self._page and not self._page.is_closed():
+                logger.info(f"Attempting visual fallback for '{target_description}' at URL {page_url}.")
+                current_screenshot_base64 = None
+                try:
+                    screenshot_bytes = await self._page.screenshot(type='png', full_page=True)
+                    current_screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+                except Exception as e:
+                    logger.error(f"Failed to take screenshot for visual fallback: {e}")
+                    # VMS will handle None screenshot if it occurs, storing a pattern indicating this issue.
+
+                try:
+                    visual_fallback_succeeded = await self.visual_system.enable_visual_fallback(
+                        page=self._page,
+                        user_id=self.identity_id,
+                        failed_action_description=target_description,
+                        failed_selector=fallback_selector,
+                        current_screenshot_base64=current_screenshot_base64
+                    )
+                    
+                    if visual_fallback_succeeded:
+                        logger.info(f"Visual fallback SUCCEEDED for '{target_description}'.")
+                        # VisualMemorySystem handles storing its own success pattern, including visuals.
+                        # No need to call _capture_visuals_if_enabled here as VMS already has the screenshot.
+                        return True
+                    else:
+                        logger.warning(f"Visual fallback FAILED for '{target_description}'. Outcome logged by VisualMemorySystem.")
+                        return False # VMS logged the specific reason for visual fallback failure
+                except Exception as e:
+                    logger.error(f"Exception during visual_system.enable_visual_fallback call for '{target_description}': {e}", exc_info=True)
+                    # If enable_visual_fallback itself raises an unhandled exception, it's a system error.
+                    # VMS should ideally catch internal errors, but if not, this path is hit.
+                    # Storing a generic visual system error might be an option here if VMS doesn't.
+                    return False
+            elif not self.visual_system_enabled:
+                logger.info("Visual system not enabled. No visual fallback attempted.")
+                return False
+            else: # Page closed or not available
+                logger.warning(f"Page not available for visual fallback for '{target_description}'.")
+                return False
 
     def get_memory_stats(self) -> dict:
         """Return basic statistics about the current memory session."""
-        if not self.memory_manager or not self.memory_manager.memory:
+        if not self.memory_manager or not hasattr(self.memory_manager, 'memory') or not self.memory_manager.memory:
             return {"memory_enabled": False}
-
-        session_ctx = self.memory_manager.get_session_context(self.identity_id)
+        
+        # Assuming get_session_context might not exist or be relevant for all Mem0 versions/adapters.
+        # A more generic check or relying on specific Mem0 features if available.
+        # For now, let's keep it simple if direct session context isn't universally applicable.
+        # interactions_count = len(self.memory_manager.memory.get_all(user_id=self.identity_id) or [])
+        # Awaiting a more robust way to get session-specific stats from Mem0 if possible.
+        # For now, just indicate memory is enabled.
         return {
             "memory_enabled": True,
-            "interactions_stored_session": len(session_ctx),
+            # "interactions_stored_session": interactions_count # Example if get_all was suitable
         }

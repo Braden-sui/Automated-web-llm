@@ -1,14 +1,27 @@
-playwright
-python-dotenv
-pydantic
+# Core Dependencies
+playwright>=1.40.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# Web Automation
 playwright-stealth>=1.0.0
-transformers
-Pillow
-pytesseract
-# agent-workflow-memory>=0.1.0 # This was the old memory system, replaced by mem0ai
-mem0ai
+
+# AI/ML Components
+transformers>=4.30.0
+sentence-transformers>=2.2.2
+ollama>=0.1.5
+
+# Image Processing
+Pillow>=10.0.0
+pytesseract>=0.3.10
+
+# Memory System
+mem0ai>=0.1.0
+
+# Database
 sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
-ollama
-llm-reasoners
-sentence-transformers
+
+# Development (optional, uncomment if needed)
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0
