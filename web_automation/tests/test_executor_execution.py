@@ -1,25 +1,38 @@
 import pytest
+import pytest_asyncio
 import asyncio
 from unittest.mock import MagicMock, AsyncMock
 from web_automation.core.browser_agent import PlaywrightBrowserAgent
+from web_automation.core.dependencies import BrowserAgentDependencies
+from web_automation.core.agent_state import AgentState
 from web_automation.models.instructions import ClickInstruction, TypeInstruction, NavigateInstruction, ActionType
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def mock_agent():
-    # Create a mock dependencies object
-    mock_deps = MagicMock()
-    mock_deps.config = {"identity_id": "test_agent", "headless": True}
+    # Create proper dependencies
+    dependencies = BrowserAgentDependencies(
+        config={"identity_id": "test_agent", "headless": True}
+    )
     
-    # Instantiate the agent
-    agent = PlaywrightBrowserAgent(mock_deps)
-    agent.start = AsyncMock()
-    agent.shutdown = AsyncMock()
-    agent._page = MagicMock()
+    # Instantiate the agent with proper dependencies
+    agent = PlaywrightBrowserAgent(dependencies)
+    
+    # Mock the page and browser infrastructure
+    agent._page = AsyncMock()
+    agent._context = AsyncMock()
+    agent._browser = AsyncMock()
+    agent._playwright = AsyncMock()
+    
+    # Mock state management methods
+    agent.current_state = AgentState.EXECUTING
+    agent._check_page_state = AsyncMock(return_value=AgentState.EXECUTING)
+    agent._handle_state_transition = AsyncMock(return_value=True)
     
     yield agent
     
-    # Cleanup if necessary
-    await agent.shutdown()
+    # Cleanup - mock the close method
+    agent.close = AsyncMock()
+    await agent.close()
 
 @pytest.mark.asyncio
 async def test_click_executor_execution(mock_agent):

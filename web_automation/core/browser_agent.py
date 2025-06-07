@@ -12,14 +12,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Callable
 from web_automation.vision.image_analyzer import ImageAnalyzer
 from urllib.parse import urlparse
+from enum import Enum
 
 from playwright.async_api import (
     async_playwright,
-    Page,
     Browser,
     BrowserContext,
-    ElementHandle,
-    TimeoutError as PlaywrightTimeoutError
+    Page,
+    TimeoutError as PlaywrightTimeoutError,
 )
 from playwright_stealth import stealth_async
 import uuid
@@ -63,6 +63,8 @@ from ..utils.fingerprint import (
 
 logger = logging.getLogger(__name__)
 
+from .agent_state import AgentState
+
 class BrowserAgentError(Exception):
     """Base exception for browser agent errors."""
     pass
@@ -73,15 +75,6 @@ class InstructionExecutionError(BrowserAgentError):
         self.instruction = instruction
         self.message = message
         super().__init__(f"Failed to execute instruction {instruction.get('type')}: {message}")
-
-class AgentState(Enum):
-    IDLE = "idle"
-    EXECUTING = "executing"
-    AWAITING_NAVIGATION = "awaiting_navigation"
-    CAPTCHA_REQUIRED = "captcha_required"
-    UNEXPECTED_MODAL = "unexpected_modal"
-    FATAL_ERROR = "fatal_error"
-    RECOVERING = "recovering"
 
 class PlaywrightBrowserAgent:
     """
@@ -890,7 +883,7 @@ class PlaywrightBrowserAgent:
 
         # If in a normal state, proceed with execution
         if self.current_state in [AgentState.IDLE, AgentState.EXECUTING]:
-            action_type = instruction.action_type if hasattr(instruction, 'action_type') else instruction.get('action_type', None)
+            action_type = getattr(instruction, 'type', None)
             if not action_type:
                 raise ValueError("Instruction does not have an action type")
 
@@ -902,10 +895,10 @@ class PlaywrightBrowserAgent:
 
             logger.info(f"Executing instruction with action type: {action_type}")
             try:
-                result = await executor.execute(self._page, instruction)
-                logger.info(f"Successfully executed instruction: {action_type}")
+                result = await executor.execute(self._page, instruction) # Core action execution
+                
                 self._actions_completed += 1
-
+                
                 # Check state after execution to catch any immediate issues
                 post_execution_state = await self._check_page_state()
                 if post_execution_state not in [AgentState.IDLE, AgentState.EXECUTING]:
@@ -916,7 +909,8 @@ class PlaywrightBrowserAgent:
                 logger.error(f"Error executing instruction {action_type}: {e}", exc_info=True)
                 raise
         else:
-            logger.warning(f"Skipping instruction execution due to current state: {self.current_state.value}")
+            current_state_str = self.current_state.value if hasattr(self.current_state, 'value') else str(self.current_state)
+            logger.warning(f"Skipping instruction execution due to current state: {current_state_str}")
             return None
 
     async def execute_instructions(self, instructions: List[Any]) -> List[Any]:

@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional, Dict, Any, List, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 class ActionType(str, Enum):
     CLICK = "click"
@@ -209,7 +209,8 @@ class InstructionSet(BaseModel):
     parallel_execution: bool = False  # Execute compatible instructions in parallel
     browser_context: Dict[str, Any] = Field(default_factory=dict)  # Browser settings
 
-    @validator('instructions', pre=True)
+    @field_validator('instructions', mode='before')
+    @classmethod
     def parse_instructions(cls, v):
         if not isinstance(v, list):
             raise ValueError("Instructions must be a list")

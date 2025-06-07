@@ -1,11 +1,12 @@
 import pytest
+import pytest_asyncio
 import asyncio
 from unittest.mock import MagicMock, AsyncMock
 from web_automation.core.browser_agent import PlaywrightBrowserAgent
 from web_automation.core.agent_state import AgentState
 from web_automation.models.instructions import ClickInstruction, ActionType
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def mock_agent():
     # Create a mock dependencies object
     mock_deps = MagicMock()

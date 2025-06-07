@@ -8,7 +8,8 @@ from typing import Optional, Union
 from ..models.instructions import NavigateInstruction, ClickInstruction, TypeInstruction
 
 from ..core.browser_agent import PlaywrightBrowserAgent, BrowserAgentError
-from .memory_manager import Mem0BrowserAdapter
+from web_automation.memory.memory_manager import Mem0BrowserAdapter
+from web_automation.models.instructions import ActionType, NavigateInstruction
 from ..config.config_models import Mem0AdapterConfig
 from ..vision.visual_memory_system import VisualMemorySystem
 from web_automation.vision.image_analyzer import ImageAnalyzer
@@ -92,13 +93,13 @@ class PersistentMemoryBrowserAgent(PlaywrightBrowserAgent):
             logger.error(f"Error during visual context capture for {action_type}: {e}", exc_info=True)
 
     async def navigate(self, url: str, **kwargs) -> None:
-        nav_instruction = NavigateInstruction(url=url, **kwargs)
-        await super()._handle_navigate(nav_instruction)
+        nav_instruction = NavigateInstruction(type=ActionType.NAVIGATE, url=url, **kwargs)
+        await self._execute_instruction_with_memory(nav_instruction, self.identity_id)
         await self._capture_visuals_if_enabled(action_type="navigate_complete", target_selector=url)
 
     async def click(self, selector: str, **kwargs) -> None:
-        click_instruction = ClickInstruction(selector=selector, **kwargs)
-        await super()._handle_click(click_instruction)
+        click_instruction = ClickInstruction(type=ActionType.CLICK, selector=selector, **kwargs)
+        await self._execute_instruction_with_memory(click_instruction, self.identity_id)
         await self._capture_visuals_if_enabled(action_type="click_complete", target_selector=selector)
 
 

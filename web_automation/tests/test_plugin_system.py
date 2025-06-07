@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import pytest_asyncio
 from unittest.mock import MagicMock, AsyncMock
 from web_automation.core.plugin_base import AgentPlugin
 from web_automation.core.browser_agent import PlaywrightBrowserAgent
@@ -17,7 +18,7 @@ class MockPlugin(AgentPlugin):
     def get_name(self):
         return self._name
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def mock_agent():
     # Create a mock dependencies object
     mock_deps = MagicMock()
@@ -40,10 +41,13 @@ async def test_plugin_initialization(mock_agent):
     plugin2 = MockPlugin("plugin2")
     plugins = [plugin1, plugin2]
 
-    # Use factory to create agent with plugins
-    factory = BrowserAgentFactory()
-    factory.create_agent = MagicMock(return_value=mock_agent)
-    agent = await factory.create_agent_with_plugins(plugins=plugins)
+    # Use factory to create agent with plugins - FIX: Use correct method
+    agent = BrowserAgentFactory.create_agent(
+        plugins=plugins,
+        browser_type='chromium',
+        headless=True,
+        identity_id='test_agent'
+    )
 
     # Verify plugins are initialized and attached to agent
     assert len(agent.plugins) == 2
@@ -61,7 +65,7 @@ async def test_plugin_access_during_execution(mock_agent):
     # Use factory to create agent with plugins
     factory = BrowserAgentFactory()
     factory.create_agent = MagicMock(return_value=mock_agent)
-    agent = await factory.create_agent_with_plugins(plugins=plugins)
+    agent = factory.create_agent(plugins=plugins)
 
     # Simulate an instruction execution that accesses a plugin
     mock_instruction = MagicMock()

@@ -168,6 +168,9 @@ security_config = SecurityConfig()
 pydantic_settings = PydanticSettings()
 mem0_adapter_config = pydantic_settings.mem0ai_config
 
+# Visual system config instance
+visual_system_config = pydantic_settings.visual_system_config
+
 # Ensure necessary directories exist
 for directory in [general_config.SCREENSHOTS_DIR, general_config.DOWNLOADS_DIR, general_config.LOGS_DIR]:
     Path(directory).mkdir(parents=True, exist_ok=True)
@@ -200,6 +203,7 @@ __all__ = [
     'proxy_config',
     'captcha_config',
     'security_config',
+    'visual_system_config',  # Added
     'pydantic_settings',
     'mem0_adapter_config',
     'validate_config'
