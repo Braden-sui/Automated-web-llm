@@ -1,6 +1,6 @@
 from typing import Any, Optional
 from web_automation.core.plugin_base import AgentPlugin
-from web_automation.captcha.vision_handler import VisionCaptchaHandler
+from web_automation.captcha.captcha_handler import VisionCaptchaHandler
 import logging
 
 logger = logging.getLogger(__name__)

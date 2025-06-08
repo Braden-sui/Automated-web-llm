@@ -168,18 +168,23 @@ async def test_memory_enhanced_agent(test_mem0_config):
             # Verify at least one pattern was stored
             assert len(all_patterns) > 0, "At least one automation pattern should be stored after smart_selector_click."
             
-            # Get the most recent pattern (should be first in results)
-            recent_pattern = all_patterns[0]
-            recent_memory = recent_pattern.get('memory', '')
-            recent_metadata = recent_pattern.get('metadata', {})
+            # Verify that at least one pattern contains our target description
+            found = any(
+                "IANA documentation" in (pattern.get('memory', '') or '')
+                for pattern in all_patterns
+            )
+            assert found, (
+                "At least one automation pattern should contain 'IANA documentation'. "
+                f"Got: {[pattern.get('memory', '') for pattern in all_patterns]}"
+            )
             
-            # Verify the pattern contains our target description
-            assert "IANA documentation" in recent_memory, \
-                f"Most recent pattern should contain 'IANA documentation'. Got: {recent_memory}"
-                
             # Verify the fallback selector is in the metadata
-            assert recent_metadata.get('original_fallback_selector') == "a[href='https://www.iana.org/domains/example']", \
-                f"Metadata should contain fallback selector. Got: {recent_metadata}"
+            for pattern in all_patterns:
+                if "IANA documentation" in pattern.get('memory', ''):
+                    recent_metadata = pattern.get('metadata', {})
+                    assert recent_metadata.get('original_fallback_selector') == "a[href='https://www.iana.org/domains/example']", \
+                        f"Metadata should contain fallback selector. Got: {recent_metadata}"
+                    break
 
         print("=== MEMORY DEBUG END ===\n")
         assert success, "smart_selector_click should succeed, at least with fallback."

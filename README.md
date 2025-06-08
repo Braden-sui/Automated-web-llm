@@ -61,44 +61,72 @@ This project implements a sophisticated web automation framework using Playwrigh
 
 ## Advanced Setup
 
+### Dependencies
+
+- **Python**: Recommended Python version 3.8+
+- **Core Python Packages:**
+  - `playwright`
+  - `playwright-stealth`
+  - `pydantic`
+  - `python-dotenv`
+  - `pillow`
+  - `opencv-python-headless`
+  - `numpy`
+  - `pytest`, `pytest-asyncio`, `pytest-mock`
+  - `python-json-logger`
+  - `requests`
+  - `python-multipart`
+  - `pyyaml`
+  - `mem0ai` (AI memory integration)
+  - `qdrant-client` (vector store)
+  - `sentence-transformers` (embeddings)
+
+- **External Dependencies:**
+  - **Ollama** (for local LLM): [ollama.com](https://ollama.com/)
+    - Ensure a supported model (e.g., `qwen2.5vl:7b`) is pulled and the Ollama server is running locally.
+  - **System Dependencies (Windows Example):**
+    ```bash
+    choco install -y vcredist2015
+    ```
+
 ### Environment Configuration
 
-1. **Python**: Recommended Python version 3.8+.
-
-2. **System Dependencies (Windows Example)**:
-
-   ```bash
-   choco install -y vcredist2015
-   ```
-
-3. **Ollama (for local LLM)**:
+1. **Ollama Setup:**
    - Install Ollama from [ollama.com](https://ollama.com/).
-   - Pull a multimodal LLM if you intend to use vision-based CAPTCHA solving or other vision tasks, or a standard LLM for Mem0 fact extraction:
-
+   - Pull a multimodal or standard LLM for Mem0 and vision tasks:
      ```bash
-     ollama pull ${CAPTCHA_MODEL} # Example multimodal model
+     ollama pull qwen2.5vl:7b
      ```
+   - Ensure Ollama server is running (default: `http://localhost:11434`).
 
-   - Ensure Ollama server is running.
-
-4. **Virtual Environment & Python Dependencies**:
-
+2. **Python Virtual Environment & Dependencies:**
    ```bash
-   # Create virtual environment
    python -m venv .venv
-
-   # Activate virtual environment (Windows)
-   .venv\Scripts\activate
-
-   # Install dependencies
+   .venv\Scripts\activate  # On Windows
    pip install -r web_automation/requirements.txt
    ```
 
-   Key dependencies in `requirements.txt` include:
-   - `playwright`
-   - `playwright-stealth`
-   - `mem0ai~=1.1`
-   - `qdrant-client`
+3. **.env File (Optional):**
+   - If any environment variables are needed, create a `.env` file in the project root and add them as `KEY=VALUE` pairs.
+   - For local Ollama, API keys are not required. If using OpenAI or other providers, add your API key as `OPENAI_API_KEY=...`.
+   - **Security:** `.env` is in `.gitignore` by default and should never be committed.
+
+### Testing
+
+- **Run the test suite:**
+  ```bash
+  pytest web_automation/tests/
+  ```
+- **Requirements:**
+  - Ollama must be running with the required model pulled.
+  - Qdrant is used in in-memory mode for tests (no external setup required).
+  - All dependencies from `requirements.txt` must be installed.
+- **Integration tests** validate real memory and vision workflows using Playwright, Mem0, Qdrant, and Ollama.
+
+### Extending the Framework
+- Add new plugins by subclassing `AgentPlugin`.
+- Add new action types by creating new executor classes.
+- Define new states in `AgentState` enum for additional resilience scenarios.
    - `sentence-transformers` (for embeddings)
    - `ollama` (Python client for Ollama)
    - `pytz`
