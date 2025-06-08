@@ -70,7 +70,7 @@ async def test_plugin_access_during_execution(mock_agent):
     # Simulate an instruction execution that accesses a plugin
     mock_instruction = MagicMock()
     from web_automation.models.instructions import ActionType
-    mock_instruction.action_type = ActionType.CLICK
+    mock_instruction.type = ActionType.CLICK  # Use 'type' not 'action_type'
     agent.executors[ActionType.CLICK].execute = AsyncMock(return_value=True)
 
     # Execute instruction

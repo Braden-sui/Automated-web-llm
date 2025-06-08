@@ -1,3 +1,4 @@
+
 import asyncio
 from playwright.async_api import Page
 from typing import Dict, Any, List, Optional
@@ -249,66 +250,22 @@ class VisualMemorySystem:
             "url": page.url
         }
 
-        if not best_match_pattern:
-            logger.info("No suitable visual pattern found for fallback.")
-            if self.memory_manager and current_screenshot_base64:
-                self.memory_manager.store_visual_pattern(
-                    user_id=user_id,
-                    description=f"{store_desc_prefix}: Failed - No matching pattern found.",
-                    visual_data=current_screenshot_base64,
-                    metadata={**common_metadata, "status": "failure_no_match"}
-                )
-            return False
+        if best_match_pattern:
+            coordinates = best_match_pattern.get('metadata', {}).get('coordinates')
+            element_desc_from_pattern = best_match_pattern.get('description', 'unknown element')
 
-        logger.info(f"Best visual match found. ID: {best_match_pattern.get('memory_id')}, Stored Desc: {best_match_pattern.get('description')[:100]}...")
-        
-        # Extract coordinates if available in the matched pattern's metadata
-        # This assumes coordinates were stored during a previous successful interaction (manual or LLM-identified)
-        coordinates = best_match_pattern.get('metadata', {}).get('coordinates')
-        element_desc_from_pattern = best_match_pattern.get('description', 'unknown element')
+            if not coordinates:
+                logger.warning(f"Visual match found (ID: {best_match_pattern.get('memory_id')}), but no coordinates in its metadata to perform click.")
+                if self.memory_manager and current_screenshot_base64:
+                    store_desc_prefix = f"Visual fallback for '{failed_action_description}' (selector: {failed_selector or 'N/A'})"
+                    self.memory_manager.store_visual_pattern(
+                        user_id=user_id,
+                        description=f"{store_desc_prefix}: Failed - Matched pattern (ID: {best_match_pattern.get('memory_id')}) lacks coordinate data.",
+                        visual_data=current_screenshot_base64,
+                        metadata={"action_type": "visual_fallback_click", "original_target_description": failed_action_description, "original_failed_selector": failed_selector, "url": page.url, "status": "failure_no_coordinates", "matched_pattern_id": best_match_pattern.get('memory_id')}
+                    )
+                return False
 
-        if not coordinates:
-            logger.warning(f"Visual match found (ID: {best_match_pattern.get('memory_id')}), but no coordinates in its metadata to perform click.")
-            if self.memory_manager and current_screenshot_base64:
-                self.memory_manager.store_visual_pattern(
-                    user_id=user_id,
-                    description=f"{store_desc_prefix}: Failed - Matched pattern (ID: {best_match_pattern.get('memory_id')}) lacks coordinate data.",
-                    visual_data=current_screenshot_base64,
-                    metadata={**common_metadata, "status": "failure_no_coordinates", "matched_pattern_id": best_match_pattern.get('memory_id')}
-                )
-            return False
+            # Attempt to perform the click using the coordinates
+            click_success = await self._perform_click_at_coordinates(page, coordinates, f"visual fallback for {failed_action_description}")
 
-        # Attempt to perform the click using the coordinates
-        click_success = await self._perform_click_at_coordinates(page, coordinates, f"visual fallback for {failed_action_description}")
-
-        if self.memory_manager and current_screenshot_base64:
-            status = "success" if click_success else "failure_action_execution"
-            self.memory_manager.store_visual_pattern(
-                user_id=user_id,
-                description=f"{store_desc_prefix}: {status.capitalize()}. Matched Pattern ID: {best_match_pattern.get('memory_id')}. Coords: {coordinates}",
-                visual_data=current_screenshot_base64,
-                metadata={**common_metadata, "status": status, "matched_pattern_id": best_match_pattern.get('memory_id'), "used_coordinates": coordinates}
-            )
-        
-        return click_success
-
-# Example Usage (conceptual - would be integrated into the agent)
-async def example_visual_system_usage(page: Page, ollama_client: ollama.AsyncClient, memory_manager, user_id: str):
-    visual_system = VisualMemorySystem(llm_client=ollama_client, memory_manager=memory_manager)
-
-    # During an automation step
-    await visual_system.capture_visual_context(page, user_id=user_id, action_type="login_page_loaded")
-
-    # If a selector fails
-    selector_failed = True
-    if selector_failed:
-        success = await visual_system.enable_visual_fallback(
-            page, 
-            user_id=user_id,
-            failed_action_description="click_login_button", 
-            failed_selector="#login-button-that-changed"
-        )
-        if success:
-            logger.info("Successfully recovered using visual fallback!")
-        else:
-            logger.error("Visual fallback also failed.")

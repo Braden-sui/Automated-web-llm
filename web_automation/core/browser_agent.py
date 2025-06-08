@@ -724,8 +724,10 @@ class PlaywrightBrowserAgent:
                 "#recaptcha", 
                 "[data-sitekey]", 
                 "iframe[src*='recaptcha']",
-                "div:contains('CAPTCHA')",
-                "div:contains('captcha')"
+                "div[class*='captcha']",      # VALID - class contains captcha
+                "div[id*='captcha']",         # VALID - id contains captcha
+                "div[class*='CAPTCHA']",      # VALID - class contains CAPTCHA
+                "div[id*='CAPTCHA']"          # VALID - id contains CAPTCHA
             ]
             for indicator in captcha_indicators:
                 element = await self._page.query_selector(indicator)
@@ -737,10 +739,13 @@ class PlaywrightBrowserAgent:
             modal_indicators = [
                 "div.modal", 
                 "div.popup", 
-                "#overlay", 
-                "div:contains('login')", 
-                "div:contains('sign in')",
-                "div:contains('session expired')"
+                "#overlay",
+                "div[class*='login']",        # VALID - class contains login
+                "div[id*='login']",           # VALID - id contains login
+                "div[class*='signin']",       # VALID - class contains signin
+                "div[class*='sign-in']",      # VALID - class contains sign-in
+                ".login-modal",               # VALID - common class name
+                ".signin-popup"                # VALID - common class name
             ]
             for indicator in modal_indicators:
                 element = await self._page.query_selector(indicator)

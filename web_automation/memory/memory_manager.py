@@ -387,7 +387,12 @@ class Mem0BrowserAdapter:
             return
 
         # The primary text for semantic search is the LLM-generated screenshot description.
-        pattern_text = visual_data.get("screenshot_description", "No visual description provided.")
+        print(f"DEBUG: visual_data type: {type(visual_data)}, value: {visual_data}")
+        if isinstance(visual_data, dict):
+            pattern_text = visual_data.get("screenshot_description", "No visual description provided.")
+        else:
+            pattern_text = str(visual_data) if visual_data else "No visual description provided."
+
         if pattern_text == "No visual description provided.":
             logger.warning(f"Storing visual pattern for {user_id} with no screenshot_description.")
 
@@ -453,6 +458,10 @@ class Mem0BrowserAdapter:
         )
         print(f"MEM0_SEARCH_RESULTS for visual_patterns (query='{query_description[:50]}...', filter={{'type': 'visual_pattern'}}): {results}") # DEBUG PRINT
         return results
+
+    def get_visual_patterns_for_user(self, user_id: str, limit: int = 10):
+        """Get visual patterns for user - required by integration tests."""
+        return self.search_visual_patterns("", user_id, limit)
 
     async def search_session_context(self, user_id: str, query: str, limit: int = 5):
         results = self.search_memory(
