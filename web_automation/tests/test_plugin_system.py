@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, AsyncMock
 from web_automation.core.plugin_base import AgentPlugin
 from web_automation.core.browser_agent import PlaywrightBrowserAgent
 from web_automation.core.factory import BrowserAgentFactory
+from web_automation.core.agent_state import AgentState # Import AgentState
 
 # Mock Plugin for Testing
 class MockPlugin(AgentPlugin):
@@ -63,15 +64,27 @@ async def test_plugin_access_during_execution(mock_agent):
     plugins = [plugin]
 
     # Use factory to create agent with plugins
+    mock_agent.plugins = {}
+    for p in plugins:
+        p.initialize(mock_agent)
+        mock_agent.plugins[p.get_name()] = p
+        
     factory = BrowserAgentFactory()
-    factory.create_agent = MagicMock(return_value=mock_agent)
-    agent = factory.create_agent(plugins=plugins)
+    factory.create_agent = MagicMock(return_value=mock_agent) # This mock is now less critical for plugin setup
+    agent = factory.create_agent(plugins=plugins) # agent is mock_agent
 
     # Simulate an instruction execution that accesses a plugin
     mock_instruction = MagicMock()
     from web_automation.models.instructions import ActionType
     mock_instruction.type = ActionType.CLICK  # Use 'type' not 'action_type'
     agent.executors[ActionType.CLICK].execute = AsyncMock(return_value=True)
+
+    # Ensure _page is set for the mock_agent, as start() is mocked and doesn't set _page
+    agent._page = MagicMock()
+
+    # Mock state checking methods to prevent actual page interaction for this plugin test
+    agent._check_page_state = AsyncMock(return_value=AgentState.IDLE)
+    agent._handle_state_transition = AsyncMock(return_value=True) # Assume successful handling
 
     # Execute instruction
     result = await agent.execute_instruction_with_state_management(mock_instruction)

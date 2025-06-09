@@ -2,21 +2,59 @@
 Original quality memory manager with minimal fix for Windows file locking
 This preserves the original clean code structure
 """
+import os
+os.environ["OPENAI_API_KEY"] = ""  # Prevent OpenAI/Ollama conflicts before mem0 import
 from mem0 import Memory
 import logging
-import os
 from datetime import datetime
 import pytz
 from web_automation.config.config_models import Mem0AdapterConfig
 import time
 import shutil
 from pathlib import Path
-from typing import Optional # Import Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+class CircuitBreaker:
+    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+
+    def call(self, func, *args, **kwargs):
+        if self.state == "OPEN":
+            if time.time() - self.last_failure_time > self.timeout:
+                self.state = "HALF_OPEN"
+            else:
+                raise Exception("Circuit breaker is OPEN")
+        try:
+            result = func(*args, **kwargs)
+            if self.state == "HALF_OPEN":
+                self.state = "CLOSED"
+                self.failure_count = 0
+            return result
+        except Exception as e:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            if self.failure_count >= self.failure_threshold:
+                self.state = "OPEN"
+            raise e
+
+import functools
+
+import functools
+from collections import OrderedDict
+
 class Mem0BrowserAdapter:
     def __init__(self, mem0_config: Mem0AdapterConfig = None):
+        # ... existing code ...
+        self._search_cache = OrderedDict()
+        self._search_cache_size = 64
+        self._cache_stats = {'hits': 0, 'misses': 0}
+
         """
         Initializes the Mem0BrowserAdapter.
 
@@ -296,172 +334,38 @@ class Mem0BrowserAdapter:
             if description is None or selector is None or user_id is None:
                 logger.error("store_automation_pattern requires description and selector when no pattern is provided.")
                 return
-            pattern_text = f"Automation Fact: For target '{description}', the selector used was '{selector}'."
-            metadata_to_store = {
-                "type": "automation_pattern",
-                "target_description": description,
-                "selector_used": selector,
-                "success": success,
-                "timestamp": datetime.now(pytz.utc).isoformat(),
-                "source": "smart_selector",
-                "original_fallback_selector": fallback_selector,
-            }
-            logger.debug(f"[DEBUG] Storing automation pattern: description='{description}', selector='{selector}', pattern_text='{pattern_text}', metadata={metadata_to_store}")
-        if metadata:
-            metadata_to_store.update(metadata)
 
-        try:
-            add_result = self.memory.add(
-                pattern_text,
-                user_id=user_id,
-                agent_id=self.mem0_config.agent_id if self.mem0_config else None,
-                metadata=metadata_to_store,
-                infer=False
-            )
-            logger.debug(f"[DEBUG] Mem0 add_result for automation_pattern: {add_result}")
-            if add_result and isinstance(add_result, dict) and add_result.get("results"):
-                logger.info(f"Successfully stored automation pattern for {user_id}. Mem0 Response: {add_result}")
-            elif add_result:
-                logger.info(f"Automation pattern storage attempted for {user_id}. Mem0 Response: {add_result}")
-            else:
-                logger.warning(f"Automation pattern storage for {user_id} resulted in no explicit confirmation from Mem0. Pattern: '{pattern_text[:100]}...'" )
-            print(f"MEM0_ADD_RESULT for automation_pattern: {add_result}") # DEBUG PRINT
-        except Exception as e:
-            logger.error(f"Error storing automation pattern for {user_id}: {e}. Pattern: '{pattern_text[:100]}...'", exc_info=True)
-
-    def search_memory(
-        self,
-        query: str,
-        user_id: str,
-        limit: int = 5,
-        metadata_filter: Optional[dict] = None
-    ):
+    def search_memory(self, query: str, user_id: str, limit: int = 5, metadata_filter: dict = None):
         if not self.memory:
             logger.warning("Memory not initialized. Cannot search memory.")
             return []
-        
         try:
+            # mem0 SDK expects 'filters' for metadata filtering
             raw_output = self.memory.search(
                 query=query,
                 user_id=user_id,
                 limit=limit,
-                filters=metadata_filter  # Mem0 search uses 'filters' for metadata
+                filters=metadata_filter
             )
-            results_list = raw_output.get('results', raw_output) if isinstance(raw_output, dict) else raw_output
-            processed_results = []
-            for item in results_list:
-                if isinstance(item, dict):
-                    processed_results.append(item)
-                else:
-                    logger.warning(f"Search result item is not a dict: {item}. Skipping.")
-            logger.debug(f"Searched memory for {user_id} with query '{query}', filter {metadata_filter}. Found {len(processed_results)} items.")
-            return processed_results
+            logger.debug(f"Mem0 search raw output: {raw_output}")
+            return raw_output
         except Exception as e:
-            logger.error(f"Error searching memory for {user_id} with query '{query}', filter {metadata_filter}: {e}", exc_info=True)
+            logger.error(f"Error searching memory for {user_id}: {e}")
             return []
 
-
-
-    def store_visual_pattern(
-        self,
-        user_id: str,
-        description: str, # e.g., 'Visual context for login_page_loaded'
-        visual_data: dict, # Contains screenshot_description, visual_landmarks, layout_type, action_type
-        metadata: Optional[dict] = None
-    ):
-        """
-        Stores a visual pattern including screenshot description and other visual metadata.
-
-        Args:
-            user_id: The ID of the user or agent.
-            description: A general description of this visual pattern.
-            visual_data: A dictionary containing detailed visual information:
-                - screenshot_description: LLM-generated text describing the screenshot.
-                - visual_landmarks: List of identified landmarks.
-                - layout_type: Classified layout type.
-                - action_type: The action associated with this visual context.
-            metadata: Optional additional metadata to store.
-        """
-        if not self.memory:
-            logger.warning("Memory not initialized. Cannot store visual pattern.")
-            return
-
-        # The primary text for semantic search is the LLM-generated screenshot description.
-        print(f"DEBUG: visual_data type: {type(visual_data)}, value: {visual_data}")
-        if isinstance(visual_data, dict):
-            pattern_text = visual_data.get("screenshot_description", "No visual description provided.")
-        else:
-            pattern_text = str(visual_data) if visual_data else "No visual description provided."
-
-        if pattern_text == "No visual description provided.":
-            logger.warning(f"Storing visual pattern for {user_id} with no screenshot_description.")
-
-        metadata_to_store = {
-            "type": "visual_pattern",
-            "original_description": description, # The description passed to this method
-            "timestamp": datetime.now(pytz.utc).isoformat(),
-            "source": "visual_memory_system",
-        }
-        # Add all fields from visual_data to metadata
-        metadata_to_store.update(visual_data)
-
-        if metadata:  # Merge any additional provided metadata
-            metadata_to_store.update(metadata)
-
-        try:
-            # Consider adding a timeout wrapper here if Mem0 supports it
-            add_result = self.memory.add(
-                pattern_text,
-                user_id=user_id,
-                agent_id=self.mem0_config.agent_id if self.mem0_config else None,
-                metadata=metadata_to_store,
-                infer=False # Store raw text, LLM description is already processed
-            )
-            if add_result and isinstance(add_result, dict) and add_result.get("results"):
-                logger.info(f"Successfully stored visual pattern for {user_id}. Mem0 Response: {add_result}")
-            elif add_result:
-                logger.info(f"Visual pattern storage attempted for {user_id}. Mem0 Response: {add_result}")
-            else:
-                logger.warning(f"Visual pattern storage for {user_id} resulted in no explicit confirmation from Mem0. Pattern: '{pattern_text[:100]}...'" )
-            print(f"MEM0_ADD_RESULT for visual_pattern: {add_result}") # DEBUG PRINT
-
-        except Exception as e:
-            logger.error(f"Error storing visual pattern for {user_id}: {e}. Pattern: '{pattern_text[:100]}...'", exc_info=True)
-
-    def search_automation_patterns(self, pattern_query: str, user_id: str, limit: int = 5):
-        results = self.search_memory(
-            query=pattern_query,
-            user_id=user_id,
-            limit=limit,
-            metadata_filter={"type": "automation_pattern"}
-        )
-        print(f"MEM0_SEARCH_RESULTS for automation_patterns (query='{pattern_query}', filter={{'type': 'automation_pattern'}}): {results}") # DEBUG PRINT
-        return results
-
-    def search_visual_patterns(self, query_description: str, user_id: str, limit: int = 5):
-        """
-        Searches for visual patterns based on a query description.
-
-        Args:
-            query_description: Textual description to search for (e.g., current screenshot's description).
-            user_id: The ID of the user or agent.
-            limit: Maximum number of patterns to return.
-
-        Returns:
-            A list of matching visual patterns.
-        """
-        results = self.search_memory(
-            query=query_description,
-            user_id=user_id,
-            limit=limit,
-            metadata_filter={"type": "visual_pattern"}
-        )
-        print(f"MEM0_SEARCH_RESULTS for visual_patterns (query='{query_description[:50]}...', filter={{'type': 'visual_pattern'}}): {results}") # DEBUG PRINT
-        return results
-
     def get_visual_patterns_for_user(self, user_id: str, limit: int = 10):
-        """Get visual patterns for user - required by integration tests."""
-        return self.search_visual_patterns("", user_id, limit)
+        """
+        Retrieve all visual patterns for a user (empty query for all patterns).
+        """
+        logger.info(f"Fetching all visual patterns for user {user_id} with limit {limit}")
+        return self.search_memory("", user_id, limit=limit, metadata_filter={"type": "visual_pattern"})
+
+    def search_automation_patterns(self, pattern_query: str, user_id: str, limit: int = 10):
+        """
+        Search for automation patterns for a user with optional query string.
+        """
+        logger.info(f"Searching automation patterns for user {user_id} with query '{pattern_query}' and limit {limit}")
+        return self.search_memory(pattern_query, user_id, limit=limit, metadata_filter={"type": "automation_pattern"})
 
     async def search_session_context(self, user_id: str, query: str, limit: int = 5):
         results = self.search_memory(

@@ -29,107 +29,115 @@ class VisualMemorySystem:
         self.memory_manager = memory_manager
         self.llm_model_name = llm_model_name
         logger.info(f"VisualMemorySystem initialized with LLM model: {self.llm_model_name}.")
+        # Concurrency control for async visual memory operations
+        self._operation_semaphore = asyncio.Semaphore(3)
+        # Track all background tasks for cleanup
+        self._background_tasks = set()
+        self._shutdown = False
+
+    async def shutdown(self):
+        """Cancel and await all background visual memory tasks (for test/agent cleanup)."""
+        self._shutdown = True
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
 
     async def _describe_image_with_llm(self, image_bytes: bytes, prompt: str) -> Optional[str]:
-        """Helper to get image description from LLM."""
-        try:
-            base64_image = base64.b64encode(image_bytes).decode('utf-8')
-            response = await self.llm_client.chat(
-                model=self.llm_model_name,
-                messages=[
-                    {
-                        'role': 'user',
-                        'content': prompt,
-                        'images': [base64_image]
-                    }
-                ]
-            )
-            description = response.get('message', {}).get('content')
-            if description:
-                logger.info(f"LLM image description received: {description[:100]}...")
-                return description.strip()
-            else:
-                logger.warning("LLM did not return a description content.")
+        """Helper to get image description from LLM (with concurrency and timeout)."""
+        async with self._operation_semaphore:
+            if self._shutdown:
+                logger.warning("VisualMemorySystem shutdown: skipping LLM call.")
                 return None
-        except Exception as e:
-            logger.error(f"Error describing image with LLM: {e}")
-            return None
+            try:
+                base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                logger.info("Calling LLM for image description...")
+                response = await asyncio.wait_for(
+                    self.llm_client.chat(
+                        model=self.llm_model_name,
+                        messages=[
+                            {
+                                'role': 'user',
+                                'content': prompt,
+                                'images': [base64_image]
+                            }
+                        ]
+                    ),
+                    timeout=30
+                )
+                description = response.get('message', {}).get('content')
+                if description:
+                    logger.info(f"LLM image description received: {description[:100]}...")
+                    return description.strip()
+                else:
+                    logger.warning("LLM did not return a description content.")
+                    return None
+            except asyncio.TimeoutError:
+                logger.error("Timeout waiting for LLM image description.")
+                return None
+            except Exception as e:
+                logger.error(f"Error describing image with LLM: {e}")
+                return None
 
     async def capture_visual_context(
         self, page: Page, user_id: str, action_type: str, target_element_selector: Optional[str] = None, current_url: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Captures visual context, describes it using the LLM, and stores it.
-
-        Args:
-            page: The Playwright page object.
-            user_id: The ID of the user or agent for memory association.
-            action_type: Description of the action being performed.
-            target_element_selector: Optional selector of the element involved.
-            current_url: The URL of the page, passed in case page.url is not yet updated.
-
-        Returns:
-            A dictionary containing visual descriptions and metadata, or None on failure.
         """
         logger.info(f"Capturing visual context for user '{user_id}', action: {action_type}, URL: {current_url or page.url}")
-        
-        try:
-            screenshot_bytes = await page.screenshot(type='png', full_page=True)
-        except Exception as e:
-            logger.error(f"Failed to take screenshot: {e}")
+        if self._shutdown:
+            logger.warning("VisualMemorySystem shutdown: skipping capture_visual_context.")
             return None
-        
-        prompt = f"Describe the visual layout and key elements on this webpage at URL {current_url or page.url}, focusing on the area related to '{action_type}'."
-        if target_element_selector:
-            prompt += f" Pay special attention to the element identified by selector '{target_element_selector}'."
-        
-        llm_text_description = await self._describe_image_with_llm(screenshot_bytes, prompt)
-        
-        if not llm_text_description:
-            logger.warning("Could not generate LLM text description. Skipping visual context storage.")
-            # Optionally, still store the image with minimal metadata if LLM fails
-            # For now, we skip if LLM description is crucial.
-            return None
-
-        visual_context_metadata = {
-            "action_type": action_type,
-            "llm_text_description": llm_text_description,
-            "target_element_selector": target_element_selector,
-            "url": current_url or page.url,
-            # Add other potential context here, e.g., extracted landmarks if we had them
-        }
-        
-        if self.memory_manager:
-            screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-            prepared_visual_data = {
-                "screenshot_base64": base64.b64encode(screenshot_bytes).decode('utf-8'),
-                "screenshot_description": llm_text_description, # LLM's description of the visual
+        async with self._operation_semaphore:
+            try:
+                logger.info("Taking screenshot for visual context...")
+                screenshot_bytes = await asyncio.wait_for(page.screenshot(type='png', full_page=True), timeout=15)
+            except asyncio.TimeoutError:
+                logger.error("Timeout taking screenshot for visual context.")
+                return None
+            except Exception as e:
+                logger.error(f"Failed to take screenshot: {e}")
+                return None
+            prompt = f"Describe the visual layout and key elements on this webpage at URL {current_url or page.url}, focusing on the area related to '{action_type}'."
+            if target_element_selector:
+                prompt += f" Pay special attention to the element identified by selector '{target_element_selector}'."
+            llm_text_description = await self._describe_image_with_llm(screenshot_bytes, prompt)
+            if not llm_text_description:
+                logger.warning("Could not generate LLM text description. Skipping visual context storage.")
+                return None
+            visual_context_metadata = {
                 "action_type": action_type,
-                "url": current_url or page.url,
+                "llm_text_description": llm_text_description,
                 "target_element_selector": target_element_selector,
-                "visual_landmarks": visual_context_metadata.get("visual_landmarks", []),
-                "layout_type": visual_context_metadata.get("layout_type", "unknown")
+                "url": current_url or page.url,
             }
-
-            general_pattern_description = f"Visual pattern for {action_type} on {prepared_visual_data['url']}"
-            
-            # Metadata for store_visual_pattern can be for other non-core details.
-            # Mem0BrowserAdapter's store_visual_pattern merges visual_data into its own metadata record.
-            # Pass a minimal dict here if all relevant info is in prepared_visual_data.
-            additional_metadata_for_call = {
-                # Example: if there were other fields in visual_context_metadata not covered above
-                # "original_raw_llm_output": visual_context_metadata.get("original_raw_llm_output")
-            }
-
-            self.memory_manager.store_visual_pattern(
-                user_id=user_id,
-                description=general_pattern_description,
-                visual_data=prepared_visual_data,
-                metadata=additional_metadata_for_call
-            )
-            logger.info(f"Visual context for '{action_type}' stored for user '{user_id}'.")
-        else:
-            logger.warning("Memory manager not available. Visual context not stored.")
+            if self.memory_manager:
+                screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+                prepared_visual_data = {
+                    "screenshot_base64": screenshot_base64,
+                    "screenshot_description": llm_text_description,
+                    "action_type": action_type,
+                    "url": current_url or page.url,
+                    "target_element_selector": target_element_selector,
+                    "visual_landmarks": visual_context_metadata.get("visual_landmarks", []),
+                    "layout_type": visual_context_metadata.get("layout_type", "unknown")
+                }
+                general_pattern_description = f"Visual pattern for {action_type} on {prepared_visual_data['url']}"
+                additional_metadata_for_call = {}
+                # Store in memory in a background task, tracked for cleanup
+                async def store_task():
+                    logger.info("Storing visual pattern in memory manager...")
+                    await self.memory_manager.store_visual_pattern(
+                        prepared_visual_data,
+                        general_pattern_description,
+                        additional_metadata_for_call
+                    )
+                task = asyncio.create_task(store_task())
+                self._background_tasks.add(task)
+                task.add_done_callback(lambda t: self._background_tasks.discard(t))
+            return visual_context_metadata
 
         return visual_context_metadata
 

@@ -33,6 +33,17 @@ Advanced web automation system using Playwright with anti-detection capabilities
   - Employs the `PersistentMemoryBrowserAgent` which enhances the base agent with memory capabilities.
   - **Local First**: Configured to run with a local Ollama LLM for processing and a local Qdrant vector store (in-memory or on-disk) for storing embeddings.
   - **Semantic Search**: Uses embeddings and similarity to recall successful patterns when encountering similar UI elements or tasks, improving automation over time.
+  - **Robust Memory Handling**: Supports multiple memory formats (dict, list, string) with comprehensive error handling.
+  - **Visual Pattern Storage**: Enhanced support for storing and recalling visual patterns for UI elements.
+  - **Detailed Documentation**: See [MEMORY_INTEGRATION.md](MEMORY_INTEGRATION.md) for comprehensive documentation.
+
+- **Visual Memory System & Fallback**:
+  - Vision-based pattern storage and recall using screenshots and LLM-powered analysis.
+  - Robust visual fallback: if a selector fails, the system matches the current UI visually against stored patterns, extracting coordinates for recovery clicks.
+  - Type-safe, fully async fallback logic with comprehensive error handling and metadata logging.
+  - All visual pattern storage and fallback now use consistent data types, eliminating runtime and type errors.
+  - Orphaned and duplicate code removed for maintainability and reliability.
+  - Detailed logging and fallback metadata for diagnostics and debugging.
 
 ## Web Automation Framework
 

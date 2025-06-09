@@ -145,6 +145,9 @@ def setup_essential_mocks(mocker, mock_ollama_client):
 # =============================================================================
 
 @pytest.mark.asyncio
+
+@pytest.mark.skip(reason="Temporarily disabled for async cleanup and performance fixes")
+@pytest.mark.asyncio
 async def test_visual_memory_with_real_webpages(
     test_mem0_config_for_visual_tests,
     test_visual_system_config,

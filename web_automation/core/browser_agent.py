@@ -77,6 +77,47 @@ class InstructionExecutionError(BrowserAgentError):
         super().__init__(f"Failed to execute instruction {instruction.get('type')}: {message}")
 
 class PlaywrightBrowserAgent:
+    # ... (existing code)
+
+    async def close(self):
+        """
+        Robust async cleanup for all browser, context, page, and memory resources.
+        Cancels outstanding async tasks, closes resources with error isolation and logs.
+        """
+        logger.info(f"[{self.identity_id}] Initiating async cleanup of PlaywrightBrowserAgent resources.")
+        # Cancel outstanding memory/visual tasks if tracked
+        if hasattr(self, "_background_tasks"):
+            logger.info(f"[{self.identity_id}] Cancelling {len(self._background_tasks)} background tasks.")
+            for task in list(self._background_tasks):
+                task.cancel()
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
+        # Close Playwright resources in order: page -> context -> browser -> playwright
+        await self._safe_close_resource(self._page, "page")
+        await self._safe_close_resource(self._context, "context")
+        await self._safe_close_resource(self._browser, "browser")
+        await self._safe_close_resource(self._playwright, "playwright")
+        logger.info(f"[{self.identity_id}] PlaywrightBrowserAgent cleanup complete.")
+
+    async def _safe_close_resource(self, resource, name):
+        if resource is None:
+            return
+        try:
+            if hasattr(resource, 'close') and asyncio.iscoroutinefunction(resource.close):
+                await asyncio.wait_for(resource.close(), timeout=10)
+            elif hasattr(resource, 'close'):
+                resource.close()
+            logger.info(f"[{self.identity_id}] Closed {name} successfully.")
+        except Exception as e:
+            logger.warning(f"[{self.identity_id}] Error closing {name}: {e}")
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        # If parent class has __aexit__, call it
+        if hasattr(super(), "__aexit__"):
+            await super().__aexit__(exc_type, exc_val, exc_tb)
+    # ... (rest of class remains unchanged)
+
     """
     A browser automation agent that executes JSON-based instructions using Playwright.
     Provides explicit image analysis API (analyze_image, analyze_current_page_visually, compare_images) via lazy-loaded ImageAnalyzer.
@@ -450,36 +491,63 @@ class PlaywrightBrowserAgent:
 
         logger.info("STEALTH: _enable_stealth completed using playwright-stealth.")
 
-    async def _apply_memory_context(self, instruction_data, memories: List[Dict]) -> any:
+    async def _apply_memory_context(self, instruction_data, memories) -> any:
         """
         Dynamically modify instruction based on retrieved memories.
         This is where the magic happens - memories actually improve performance!
         """
         if not memories:
             return instruction_data
-        
+
         # Create a mutable copy of the instruction
         enhanced_instruction = instruction_data.copy() if hasattr(instruction_data, 'copy') else instruction_data
-        
+
+        # 90/10 fix: Handle different memory formats safely
+        memory_list = []
+        if isinstance(memories, dict):
+            if 'results' in memories:
+                memory_list = memories['results']
+            else:
+                memory_list = list(memories.values())
+        elif isinstance(memories, list):
+            memory_list = memories
+        else:
+            print(f"Unexpected memory format: {type(memories)}")
+            return enhanced_instruction
+
         # Extract learned patterns from memories
-        for memory in memories:
-            memory_text = memory.get('memory', '')
-            
-            # Speed optimization from memory
-            if 'slow clicking preferred' in memory_text.lower():
-                if hasattr(enhanced_instruction, 'delay'):
-                    enhanced_instruction.delay = max(getattr(enhanced_instruction, 'delay', 0) or 0, 2.0)
-                    logger.info(f"Applied memory: increased delay to {enhanced_instruction.delay}s")
-            
-            # Selector optimization from memory
-            if 'successful selector:' in memory_text.lower():
-                # Extract successful selector from memory
-                success_match = re.search(r'successful selector: ([^\s]+)', memory_text)
-                if success_match and hasattr(enhanced_instruction, 'selector'):
-                    learned_selector = success_match.group(1)
-                    if getattr(enhanced_instruction, 'selector', None) != learned_selector:
-                        logger.info(f"Applying learned selector: {learned_selector}")
-                        enhanced_instruction.selector = learned_selector
+        for memory in memory_list:
+            try:
+                # Handle both string and dict memory formats
+                if isinstance(memory, str):
+                    memory_text = memory
+                elif isinstance(memory, dict):
+                    memory_text = memory.get('memory', '')
+                else:
+                    continue
+                    
+                if not memory_text:
+                    continue
+                    
+                # Speed optimization from memory
+                if 'slow clicking preferred' in memory_text.lower():
+                    if hasattr(enhanced_instruction, 'delay'):
+                        enhanced_instruction.delay = max(getattr(enhanced_instruction, 'delay', 0) or 0, 2.0)
+                        logger.info(f"Applied memory: increased delay to {enhanced_instruction.delay}s")
+                
+                # Selector optimization from memory
+                if 'successful selector:' in memory_text.lower():
+                    # Extract successful selector from memory
+                    success_match = re.search(r'successful selector: ([^\s]+)', memory_text)
+                    if success_match and hasattr(enhanced_instruction, 'selector'):
+                        learned_selector = success_match.group(1)
+                        if getattr(enhanced_instruction, 'selector', None) != learned_selector:
+                            logger.info(f"Applying learned selector: {learned_selector}")
+                            enhanced_instruction.selector = learned_selector
+                            
+            except Exception as e:
+                logger.error(f"Error processing memory: {e}")
+                continue
             
             # Wait strategy from memory
             if 'wait strategy:' in memory_text.lower():
